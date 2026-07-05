@@ -17,6 +17,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.focus.FocusRequester
@@ -113,6 +114,10 @@ fun CodeEditor(
         val c = (scrollX - delta).coerceIn(0f, maxScrollX); val moved = scrollX - c; scrollX = c; moved
     }
 
+    // 选区拖拽状态（提升到组合级，供边缘自动滚动 effect 读取）。
+    var selectionAnchor by remember { mutableStateOf<TextPosition?>(null) }
+    var selectionDragPos by remember { mutableStateOf<Offset?>(null) }
+
     var blink by remember { mutableStateOf(true) }
     LaunchedEffect(engine.selection, readOnly) {
         blink = true
@@ -121,6 +126,7 @@ fun CodeEditor(
 
     LaunchedEffect(engine.selection, viewportHeight) {
         if (viewportHeight <= 0f) return@LaunchedEffect
+        if (selectionDragPos != null) return@LaunchedEffect // 选区拖拽时由边缘自动滚动接管
         val caretY = engine.selEnd.line * lineHeightPx
         if (caretY < scrollY) scrollY = caretY
         else if (caretY + lineHeightPx > scrollY + viewportHeight) scrollY = caretY + lineHeightPx - viewportHeight
@@ -132,12 +138,32 @@ fun CodeEditor(
     val hitScrollX = rememberUpdatedState(clampedScrollX)
     val hitGutterWidth = rememberUpdatedState(gutterWidthPx)
 
-    fun positionAt(offset: Offset): TextPosition {
-        val ln = EditorGeometry.lineAtY(offset.y, hitScrollY.value, lineHeightPx, engine.buffer.lineCount)
+    fun positionAtWithScroll(offset: Offset, sY: Float, sX: Float): TextPosition {
+        val ln = EditorGeometry.lineAtY(offset.y, sY, lineHeightPx, engine.buffer.lineCount)
         val layout = layoutFor(ln)
-        val localX = (offset.x - hitGutterWidth.value - padXPx + hitScrollX.value).coerceAtLeast(0f)
+        val localX = (offset.x - hitGutterWidth.value - padXPx + sX).coerceAtLeast(0f)
         val col = layout?.getOffsetForPosition(Offset(localX, layout.size.height / 2f)) ?: 0
         return TextPosition(ln, col.coerceAtMost(engine.buffer.lineLength(ln)))
+    }
+
+    fun positionAt(offset: Offset): TextPosition = positionAtWithScroll(offset, hitScrollY.value, hitScrollX.value)
+
+    // 选区拖拽到视口上/下热区时，按帧持续滚动并同步延伸选区；速度随进入热区的深度线性增大。
+    LaunchedEffect(selectionDragPos != null) {
+        if (selectionDragPos == null) return@LaunchedEffect
+        while (true) {
+            val pos = selectionDragPos ?: break
+            val anchor = selectionAnchor ?: break
+            val step = edgeAutoScrollSpeed(pos.y, viewportHeight, lineHeightPx)
+            if (step != 0f && maxScrollY > 0f) {
+                val newY = (scrollY + step).coerceIn(0f, maxScrollY)
+                if (newY != scrollY) {
+                    scrollY = newY
+                    engine.setSelection(anchor, positionAtWithScroll(pos, newY, scrollX.coerceIn(0f, maxScrollX)))
+                }
+            }
+            withFrameNanos { }
+        }
     }
 
     Box(
@@ -185,16 +211,23 @@ fun CodeEditor(
             .then(
                 if (readOnly) Modifier else Modifier.pointerInput(engine) {
                     // 长按才进入选择：长按处先选中该词，随后拖拽扩展选区。普通拖拽不在此消费，
-                    // 于是落到上面的 scrollable 去滚动页面（移动端标准行为）。
-                    var anchor = TextPosition(0, 0)
+                    // 于是落到上面的 scrollable 去滚动页面（移动端标准行为）。拖到上下边缘由
+                    // selectionDragPos 驱动的边缘自动滚动 effect 接管。
                     detectDragGesturesAfterLongPress(
                         onDragStart = { p ->
-                            anchor = positionAt(p)
-                            val w = engine.wordRangeAt(anchor)
+                            val pos = positionAt(p)
+                            selectionAnchor = pos
+                            val w = engine.wordRangeAt(pos)
                             engine.setSelection(w.start, w.end)
                             focusRequester.requestFocus()
+                            selectionDragPos = p
                         },
-                        onDrag = { change, _ -> engine.setSelection(anchor, positionAt(change.position)) },
+                        onDrag = { change, _ ->
+                            selectionDragPos = change.position
+                            selectionAnchor?.let { engine.setSelection(it, positionAt(change.position)) }
+                        },
+                        onDragEnd = { selectionDragPos = null },
+                        onDragCancel = { selectionDragPos = null },
                     )
                 }
             )
@@ -215,5 +248,20 @@ fun CodeEditor(
             layoutFor = ::layoutFor,
             modifier = Modifier.fillMaxSize(),
         )
+    }
+}
+
+/**
+ * 选区拖拽的边缘自动滚动：finger 进入顶部/底部「热区」时返回每帧滚动步长（顶部为负、底部为正），
+ * 步长随进入热区的深度（含越过边缘）线性放大，上限 3 倍。不在热区返回 0。
+ */
+private fun edgeAutoScrollSpeed(y: Float, viewportHeight: Float, lineHeight: Float): Float {
+    if (viewportHeight <= 0f) return 0f
+    val hot = lineHeight * 2.5f
+    val maxStep = lineHeight * 0.6f
+    return when {
+        y < hot -> -maxStep * ((hot - y) / hot).coerceIn(0f, 3f)
+        y > viewportHeight - hot -> maxStep * ((y - (viewportHeight - hot)) / hot).coerceIn(0f, 3f)
+        else -> 0f
     }
 }
