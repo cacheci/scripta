@@ -7,9 +7,9 @@ import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
-import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.rememberScrollableState
 import androidx.compose.foundation.gestures.scrollable
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -309,18 +309,32 @@ fun CodeEditor(
             }
             .focusRequester(focusRequester)
             .focusable(interactionSource = interaction)
-            // 点按/长按手势在只读模式下同样挂载：可放置光标、选词、拖拽扩选以便复制；只读时仅
-            // 不弹软键盘、不接受任何编辑。requestShowKeyboard 用 readOnlyLive 读当前帧值（闭包由
-            // pointerInput(engine) 固定、不随 readOnly 切换重启）。
+            // 点按手势（只读时同样挂载：仅不弹软键盘、不接受编辑）。自定义而非 detectTapGestures：
+            // 后者一旦提供 onDoubleTap，就要等双击超时(~300ms)确认才回调 onTap，点击落光标发闷。这里
+            // 第一击抬手「立即」落光标 + 弹键盘；双击窗口内若来第二击，升级为选词（桌面双击、移动端双击皆可）。
+            // 长按拖拽由下方 block 接管——指针被其消费/取消时 waitForUpOrCancellation 返回 null，本 block 让位。
             .pointerInput(engine) {
-                detectTapGestures(
-                    onTap = { p ->
-                        engine.setCursor(positionAtLive.value(p))
+                awaitEachGesture {
+                    awaitFirstDown(requireUnconsumed = false)
+                    // 等抬手，但包一层长按超时：若超时前未抬手，说明这次已升级为长按（由下方 block 选词），
+                    // 本 block 直接让位、不落光标——否则纯长按选词后「不拖动直接抬手」会把刚选好的词塌成光标
+                    // （长按 block 不移动时不消费任何 change，waitForUpOrCancellation 拿到未消费的 up 会误触发）。
+                    val up = withTimeoutOrNull(viewConfiguration.longPressTimeoutMillis) {
+                        waitForUpOrCancellation()
+                    } ?: return@awaitEachGesture
+                    engine.setCursor(positionAtLive.value(up.position))
+                    focusRequester.requestFocus()
+                    if (!readOnlyLive.value) engine.requestShowKeyboard?.invoke()
+                    val second = withTimeoutOrNull(viewConfiguration.doubleTapTimeoutMillis) {
+                        awaitFirstDown(requireUnconsumed = false)
+                    }
+                    val up2 = if (second != null) waitForUpOrCancellation() else null
+                    if (up2 != null) {
+                        val w = engine.wordRangeAt(positionAtLive.value(up2.position))
+                        engine.setSelection(w.start, w.end)
                         focusRequester.requestFocus()
-                        if (!readOnlyLive.value) engine.requestShowKeyboard?.invoke()
-                    },
-                    onDoubleTap = { p -> val w = engine.wordRangeAt(positionAtLive.value(p)); engine.setSelection(w.start, w.end); focusRequester.requestFocus() },
-                )
+                    }
+                }
             }
             .pointerInput(engine) {
                 // 长按才进入选择：长按处先选中该词，随后拖拽扩展选区。普通拖拽不在此消费，
