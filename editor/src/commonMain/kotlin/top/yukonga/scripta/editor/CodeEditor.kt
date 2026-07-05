@@ -256,10 +256,12 @@ fun CodeEditor(
                 if (ev.type != KeyEventType.KeyDown) return@onKeyEvent false
                 if (ev.isCtrlPressed) {
                     when (ev.key) {
+                        // 全选/复制在只读模式下依然可用（只读恰恰最需要可选可复制）。
                         Key.A -> { engine.selectAll(); true }
                         Key.C -> { engine.selectedText()?.let { clipboard.setText(AnnotatedString(it)) }; true }
-                        Key.X -> { engine.selectedText()?.let { clipboard.setText(AnnotatedString(it)); engine.replaceSelection("") }; true }
-                        Key.V -> { clipboard.getText()?.text?.let { engine.insert(it) }; true }
+                        // 剪切/粘贴会改动文档，只读时消费事件但不执行。
+                        Key.X -> { if (!readOnly) engine.selectedText()?.let { clipboard.setText(AnnotatedString(it)); engine.replaceSelection("") }; true }
+                        Key.V -> { if (!readOnly) clipboard.getText()?.text?.let { engine.insert(it) }; true }
                         else -> false
                     }
                 } else {
