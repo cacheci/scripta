@@ -205,18 +205,25 @@ fun CodeEditor(
     // 始终调「当前帧」的 positionAt（内含最新的 lineHeightPx / 视觉行索引 / softWrap / layout）。
     val positionAtLive = rememberUpdatedState<(Offset) -> TextPosition> { positionAt(it) }
 
+    // 边缘自动滚动 effect 的 key 是 Boolean、不随重组刷新，循环体会按值捕获滚动上限。软换行下自动滚动
+    // 驶入未测量区域时真实 maxScrollY 会随测量增大，用 rememberUpdatedState 让循环读到当前帧上限，
+    // 否则会停在旧估算的「假底部」、选不到文档末尾（与 hitScrollY 同类修复）。
+    val liveMaxScrollY = rememberUpdatedState(maxScrollY)
+    val liveMaxScrollX = rememberUpdatedState(maxScrollX)
+
     // 选区拖拽到视口上/下热区时，按帧持续滚动并同步延伸选区；速度随进入热区的深度线性增大。
     LaunchedEffect(selectionDragPos != null) {
         if (selectionDragPos == null) return@LaunchedEffect
         while (true) {
             val pos = selectionDragPos ?: break
             val anchor = selectionAnchor ?: break
+            val maxY = liveMaxScrollY.value
             val step = edgeAutoScrollSpeed(pos.y, viewportHeight, lineHeightPx)
-            if (step != 0f && maxScrollY > 0f) {
-                val newY = (scrollY + step).coerceIn(0f, maxScrollY)
+            if (step != 0f && maxY > 0f) {
+                val newY = (scrollY + step).coerceIn(0f, maxY)
                 if (newY != scrollY) {
                     scrollY = newY
-                    engine.setSelection(anchor, positionAtWithScroll(pos, newY, scrollX.coerceIn(0f, maxScrollX)))
+                    engine.setSelection(anchor, positionAtWithScroll(pos, newY, scrollX.coerceIn(0f, liveMaxScrollX.value)))
                 }
             }
             withFrameNanos { }
