@@ -5,6 +5,7 @@ import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.calculateCentroid
 import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.rememberScrollableState
@@ -257,7 +258,8 @@ fun CodeEditor(
             .scrollable(vScroll, Orientation.Vertical)
             .scrollable(hScroll, Orientation.Horizontal)
             .pointerInput(Unit) {
-                // 双指缩放调字号：仅在 ≥2 指时消费，单指留给滚动/选择。等比缩放滚动位置以稳住视觉位置。
+                // 双指缩放调字号：仅在 ≥2 指时消费，单指留给滚动/选择。以双指焦点为锚——焦点下的文档
+                // 位置在缩放后仍停在焦点处（而非锚住视口顶/左，否则想放大看的那行会滑离手指）。
                 awaitEachGesture {
                     awaitFirstDown(requireUnconsumed = false)
                     do {
@@ -268,8 +270,23 @@ fun CodeEditor(
                                 val old = fontSizeSp
                                 val next = (old * zoom).coerceIn(8f, 40f)
                                 if (next != old) {
+                                    val k = next / old
+                                    val c = event.calculateCentroid(useCurrent = true)
+                                    // 锚基取「当前显示的钳制值」：下游只在 draw/命中处按 maxScroll 钳制、不回写 state，
+                                    // 若直接以原始 scrollY/X 为锚，边缘缩放会让其溢出上界并逐帧累积，反向缩放时黏在
+                                    // 边缘不跟随焦点。用 liveMaxScrollY/X 先钳回显示值再代入焦点公式。
+                                    val baseY = scrollY.coerceIn(0f, liveMaxScrollY.value)
+                                    val baseX = scrollX.coerceIn(0f, liveMaxScrollX.value)
                                     fontSizeSp = next
-                                    scrollY *= next / old
+                                    if (c != Offset.Unspecified) {
+                                        // 令焦点处内容缩放后不动：newScroll = (base + focal) * k - focal。
+                                        scrollY = ((baseY + c.y) * k - c.y).coerceAtLeast(0f)
+                                        // 焦点相对正文起点；gutter 常量项随字号变、此处用旧宽近似，字号大变时横向有微量漂移（纵向精确）。
+                                        val fx = c.x - (hitGutterWidth.value + padXPx)
+                                        scrollX = ((baseX + fx) * k - fx).coerceAtLeast(0f)
+                                    } else {
+                                        scrollY = baseY * k
+                                    }
                                 }
                                 event.changes.forEach { it.consume() }
                             }
