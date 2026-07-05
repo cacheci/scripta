@@ -110,4 +110,64 @@ class EditorEngineTest {
         assertEquals("brand\nnew", e.getText())
         assertEquals(TextPosition(1, 3), e.selStart)
     }
+
+    // --- Task 5: IME composing + surrounding 删除 ---
+
+    @Test fun composingShowsRegionAndAdvancesCaret() {
+        val e = EditorEngine("")
+        e.setComposingText("ni", 1)
+        assertEquals("ni", e.getText())
+        assertEquals(0 to 2, e.composingOffsets())
+        assertEquals(2 to 2, e.selectionOffsets())
+    }
+
+    @Test fun pinyinComposeThenCommitToHanzi() {
+        val e = EditorEngine("")
+        e.setComposingText("n", 1)
+        e.setComposingText("ni", 1)
+        e.setComposingText("nihao", 1)
+        assertEquals("nihao", e.getText())
+        e.commitText("你好", 1)
+        assertEquals("你好", e.getText())
+        assertNull(e.composing)
+        assertEquals(2 to 2, e.selectionOffsets())
+    }
+
+    @Test fun composingKeepsSurroundingText() {
+        val e = EditorEngine("ab")
+        e.setCursor(TextPosition(0, 1))
+        e.setComposingText("X", 1)
+        assertEquals("aXb", e.getText())
+        assertEquals(1 to 2, e.composingOffsets())
+    }
+
+    @Test fun finishComposingKeepsText() {
+        val e = EditorEngine("")
+        e.setComposingText("abc", 1)
+        e.finishComposing()
+        assertEquals("abc", e.getText())
+        assertNull(e.composing)
+    }
+
+    @Test fun deleteSurroundingTextCharUnits() {
+        val e = EditorEngine("abcdef")
+        e.setCursor(TextPosition(0, 3))
+        e.deleteSurroundingText(2, 1) // 删 "bc" 与 "d"
+        assertEquals("aef", e.getText())
+        assertEquals(TextPosition(0, 1), e.selStart)
+    }
+
+    @Test fun deleteSurroundingAcrossNewline() {
+        val e = EditorEngine("ab\ncd")
+        e.setCursor(TextPosition(1, 0)) // offset 3, 前面是 '\n'
+        e.deleteSurroundingText(1, 0)   // 删掉换行 -> 合并
+        assertEquals("abcd", e.getText())
+    }
+
+    @Test fun deleteSurroundingInCodePointsRespectsSurrogates() {
+        val e = EditorEngine("😀X") // 😀X
+        e.setCursor(TextPosition(0, 3))           // X 之后
+        e.deleteSurroundingTextInCodePoints(2, 0) // 删 X 与整个 😀（2 个 code point）
+        assertEquals("", e.getText())
+    }
 }

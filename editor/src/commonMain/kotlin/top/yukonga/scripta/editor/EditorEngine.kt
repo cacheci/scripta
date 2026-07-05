@@ -127,6 +127,84 @@ class EditorEngine(initialText: String = "") {
         replaceRange(TextRange(selEnd, next), "")
     }
 
+    // --- IME composing -----------------------------------------------------------------------
+
+    fun setComposingText(text: String, newCursorPosition: Int) {
+        val target = (composing ?: selection).normalized()
+        val caret = buffer.replace(target, text)
+        index.invalidateFrom(target.start.line)
+        composing = if (text.isEmpty()) null else TextRange(target.start, caret)
+        selection = TextRange.cursor(cursorAfterInsert(target.start, newCursorPosition, caret))
+        maybeNotify()
+    }
+
+    fun setComposingRegion(startOffset: Int, endOffset: Int) {
+        val lo = minOf(startOffset, endOffset).coerceAtLeast(0)
+        val hi = maxOf(startOffset, endOffset).coerceAtMost(index.totalLength())
+        composing = if (lo == hi) null else TextRange(index.positionOf(lo), index.positionOf(hi))
+        maybeNotify()
+    }
+
+    fun finishComposing() {
+        if (composing != null) {
+            composing = null
+            maybeNotify()
+        }
+    }
+
+    // --- surrounding 删除（IME，offset 语义）--------------------------------------------------
+
+    fun deleteSurroundingText(before: Int, after: Int) {
+        val (selS, selE) = selectionOffsets()
+        val total = index.totalLength()
+        val delStart = (selS - before.coerceAtLeast(0)).coerceAtLeast(0)
+        val delEnd = (selE + after.coerceAtLeast(0)).coerceAtMost(total)
+        // 先删尾段（不影响其前的 offset），再删头段。
+        buffer.replace(TextRange(index.positionOf(selE), index.positionOf(delEnd)), "")
+        index.invalidateFrom(index.positionOf(selE).line)
+        buffer.replace(TextRange(index.positionOf(delStart), index.positionOf(selS)), "")
+        index.invalidateFrom(index.positionOf(delStart).line)
+        composing = null
+        selection = TextRange.cursor(index.positionOf(delStart))
+        maybeNotify()
+    }
+
+    fun deleteSurroundingTextInCodePoints(before: Int, after: Int) {
+        val beforeChars = charsForCodePoints(textBeforeCursorString(before * 2 + 2), before, fromEnd = true)
+        val afterChars = charsForCodePoints(textAfterCursorString(after * 2 + 2), after, fromEnd = false)
+        deleteSurroundingText(beforeChars, afterChars)
+    }
+
+    private fun textBeforeCursorString(n: Int): String {
+        val off = index.offsetOf(selStart)
+        val start = (off - n).coerceAtLeast(0)
+        return buffer.textInRange(TextRange(index.positionOf(start), selStart))
+    }
+
+    private fun textAfterCursorString(n: Int): String {
+        val off = index.offsetOf(selEnd)
+        val end = (off + n).coerceAtMost(index.totalLength())
+        return buffer.textInRange(TextRange(selEnd, index.positionOf(end)))
+    }
+
+    private fun charsForCodePoints(window: String, codePoints: Int, fromEnd: Boolean): Int {
+        var chars = 0
+        var cps = 0
+        while (cps < codePoints) {
+            val idx = if (fromEnd) window.length - chars - 1 else chars
+            if (idx < 0 || idx >= window.length) break
+            val c = window[idx]
+            val pair = if (fromEnd) {
+                idx - 1 >= 0 && window[idx - 1].isHighSurrogate() && c.isLowSurrogate()
+            } else {
+                idx + 1 < window.length && c.isHighSurrogate() && window[idx + 1].isLowSurrogate()
+            }
+            chars += if (pair) 2 else 1
+            cps++
+        }
+        return chars
+    }
+
     // --- 内部辅助 ----------------------------------------------------------------------------
 
     private fun cursorAfterInsert(insertStart: TextPosition, newCursorPosition: Int, insertedEnd: TextPosition): TextPosition {
