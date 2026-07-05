@@ -27,5 +27,8 @@ kotlin {
             // Brings compose runtime + ui + ui-text + foundation-layout transitively.
             api(libs.compose.foundation)
         }
+        commonTest.dependencies {
+            implementation(kotlin("test"))
+        }
     }
 }
