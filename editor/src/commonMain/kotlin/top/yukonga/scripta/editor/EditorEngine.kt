@@ -1,0 +1,162 @@
+package top.yukonga.scripta.editor
+
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import top.yukonga.scripta.editor.text.LineOffsetIndex
+import top.yukonga.scripta.editor.text.TextBuffer
+import top.yukonga.scripta.editor.text.TextPosition
+import top.yukonga.scripta.editor.text.TextRange
+
+/**
+ * 编辑引擎：持有 TextBuffer + 归一化选择 + 可选 composing 区间，承载全部编辑/选择/IME 语义
+ * （由 spike 的 MiniEditorState 推广到 (行,列) 坐标）。offset 只在 IME 边界经 LineOffsetIndex 换算。
+ *
+ * selection 恒为归一化（start ≤ end）；cursor 即 start == end。composing 为 null 表示无输入法预编辑。
+ */
+class EditorEngine(initialText: String = "") {
+
+    val buffer = TextBuffer()
+    private val index = LineOffsetIndex(buffer)
+
+    var selection: TextRange by mutableStateOf(TextRange.cursor(TextPosition(0, 0)))
+        private set
+
+    var composing: TextRange? by mutableStateOf(null)
+        private set
+
+    val selStart: TextPosition get() = selection.start
+    val selEnd: TextPosition get() = selection.end
+
+    interface ImeListener {
+        fun onSelectionChanged(selStart: Int, selEnd: Int, composingStart: Int, composingEnd: Int)
+    }
+
+    var imeListener: ImeListener? = null
+    var requestShowKeyboard: (() -> Unit)? = null
+
+    private var batchDepth = 0
+
+    init {
+        if (initialText.isNotEmpty()) setText(initialText) else selection = TextRange.cursor(buffer.endPosition())
+    }
+
+    // --- 批处理 / IME 通知 -------------------------------------------------------------------
+
+    fun beginBatch() { batchDepth++ }
+
+    fun endBatch(): Boolean {
+        if (batchDepth > 0) batchDepth--
+        if (batchDepth == 0) fireIme()
+        return batchDepth > 0
+    }
+
+    private fun maybeNotify() { if (batchDepth == 0) fireIme() }
+
+    fun fireIme() {
+        val l = imeListener ?: return
+        val s = selectionOffsets()
+        val c = composingOffsets()
+        l.onSelectionChanged(s.first, s.second, c.first, c.second)
+    }
+
+    fun selectionOffsets(): Pair<Int, Int> = index.offsetOf(selStart) to index.offsetOf(selEnd)
+
+    fun composingOffsets(): Pair<Int, Int> {
+        val c = composing ?: return -1 to -1
+        return index.offsetOf(c.start) to index.offsetOf(c.end)
+    }
+
+    // --- 文本进出 ----------------------------------------------------------------------------
+
+    fun getText(): String = buffer.text()
+
+    fun setText(text: String) {
+        buffer.setText(text)
+        index.invalidateFrom(0)
+        selection = TextRange.cursor(buffer.endPosition())
+        composing = null
+        maybeNotify()
+    }
+
+    // --- 选择 --------------------------------------------------------------------------------
+
+    fun setSelection(a: TextPosition, b: TextPosition, keepComposing: Boolean = false) {
+        selection = TextRange(buffer.clamp(a), buffer.clamp(b)).normalized()
+        if (!keepComposing) composing = null
+        maybeNotify()
+    }
+
+    fun setCursor(p: TextPosition) = setSelection(p, p)
+
+    fun selectAll() = setSelection(TextPosition(0, 0), buffer.endPosition())
+
+    // --- 编辑原语 ----------------------------------------------------------------------------
+
+    private fun replaceRange(range: TextRange, text: String) {
+        val startLine = range.normalized().start.line
+        val caret = buffer.replace(range, text)
+        index.invalidateFrom(startLine)
+        composing = null
+        selection = TextRange.cursor(caret)
+        maybeNotify()
+    }
+
+    fun replaceSelection(text: String) = replaceRange(selection, text)
+
+    fun commitText(text: String, newCursorPosition: Int) {
+        val target = (composing ?: selection).normalized()
+        val caret = buffer.replace(target, text)
+        index.invalidateFrom(target.start.line)
+        composing = null
+        selection = TextRange.cursor(cursorAfterInsert(target.start, newCursorPosition, caret))
+        maybeNotify()
+    }
+
+    fun insert(text: String) = commitText(text, 1)
+
+    fun backspace() {
+        if (!selection.isEmpty) { replaceRange(selection, ""); return }
+        val prev = previousCodePointPosition(selStart) ?: return
+        replaceRange(TextRange(prev, selStart), "")
+    }
+
+    fun deleteForward() {
+        if (!selection.isEmpty) { replaceRange(selection, ""); return }
+        val next = nextCodePointPosition(selEnd) ?: return
+        replaceRange(TextRange(selEnd, next), "")
+    }
+
+    // --- 内部辅助 ----------------------------------------------------------------------------
+
+    private fun cursorAfterInsert(insertStart: TextPosition, newCursorPosition: Int, insertedEnd: TextPosition): TextPosition {
+        if (newCursorPosition == 1) return insertedEnd
+        val startOff = index.offsetOf(insertStart)
+        val endOff = index.offsetOf(insertedEnd)
+        val raw = if (newCursorPosition > 0) endOff + (newCursorPosition - 1) else startOff + newCursorPosition
+        return index.positionOf(raw.coerceIn(0, index.totalLength()))
+    }
+
+    internal fun previousCodePointPosition(pos: TextPosition): TextPosition? {
+        if (pos.column > 0) {
+            val line = buffer.lineText(pos.line)
+            val c = pos.column
+            val step = if (c >= 2 && line[c - 1].isLowSurrogate() && line[c - 2].isHighSurrogate()) 2 else 1
+            return TextPosition(pos.line, c - step)
+        }
+        if (pos.line > 0) return TextPosition(pos.line - 1, buffer.lineLength(pos.line - 1))
+        return null
+    }
+
+    internal fun nextCodePointPosition(pos: TextPosition): TextPosition? {
+        val len = buffer.lineLength(pos.line)
+        if (pos.column < len) {
+            val line = buffer.lineText(pos.line)
+            val c = pos.column
+            val step = if (c + 1 < len && line[c].isHighSurrogate() && line[c + 1].isLowSurrogate()) 2 else 1
+            return TextPosition(pos.line, c + step)
+        }
+        if (pos.line < buffer.lineCount - 1) return TextPosition(pos.line + 1, 0)
+        return null
+    }
+}
