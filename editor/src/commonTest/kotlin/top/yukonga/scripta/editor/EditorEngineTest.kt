@@ -170,4 +170,61 @@ class EditorEngineTest {
         e.deleteSurroundingTextInCodePoints(2, 0) // 删 X 与整个 😀（2 个 code point）
         assertEquals("", e.getText())
     }
+
+    // --- Task 6: 光标导航 + getter ---
+
+    @Test fun horizontalMoveIsCodePointAware() {
+        val e = EditorEngine("😀") // 😀 长度 2
+        e.setCursor(TextPosition(0, 2))
+        e.moveCaretHorizontally(-1, extend = false)
+        assertEquals(TextPosition(0, 0), e.selStart)
+    }
+
+    @Test fun horizontalMoveCrossesLineBoundary() {
+        val e = EditorEngine("ab\ncd")
+        e.setCursor(TextPosition(0, 2))
+        e.moveCaretHorizontally(1, extend = false) // 越过行尾 -> 下一行行首
+        assertEquals(TextPosition(1, 0), e.selStart)
+    }
+
+    @Test fun verticalMovePreservesColumn() {
+        val e = EditorEngine("abcd\nef")
+        e.setCursor(TextPosition(0, 3))
+        e.moveCaretVertically(1, extend = false)
+        assertEquals(TextPosition(1, 2), e.selStart) // 目标行较短 -> 夹到行尾
+    }
+
+    @Test fun extendSelectionWithArrow() {
+        val e = EditorEngine("hello")
+        e.setCursor(TextPosition(0, 1))
+        e.moveCaretHorizontally(1, extend = true)
+        assertEquals(TextPosition(0, 1), e.selStart)
+        assertEquals(TextPosition(0, 2), e.selEnd)
+    }
+
+    @Test fun selectedTextIncludesNewline() {
+        val e = EditorEngine("line1\nline2\nline3")
+        e.setSelection(TextPosition(0, 2), TextPosition(2, 2))
+        assertEquals("ne1\nline2\nli", e.selectedText())
+    }
+
+    @Test fun noSelectionSelectedTextNull() {
+        val e = EditorEngine("abc")
+        e.setCursor(TextPosition(0, 1))
+        assertNull(e.selectedText())
+    }
+
+    @Test fun textBeforeAndAfterCursor() {
+        val e = EditorEngine("abcdef")
+        e.setCursor(TextPosition(0, 3))
+        assertEquals("bc", e.textBeforeCursor(2).toString())
+        assertEquals("de", e.textAfterCursor(2).toString())
+    }
+
+    @Test fun wordRangeSelectsWord() {
+        val e = EditorEngine("foo bar baz")
+        val r = e.wordRangeAt(TextPosition(0, 5)) // 落在 "bar"
+        assertEquals(TextPosition(0, 4), r.start)
+        assertEquals(TextPosition(0, 7), r.end)
+    }
 }

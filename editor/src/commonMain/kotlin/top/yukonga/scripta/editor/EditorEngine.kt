@@ -205,6 +205,45 @@ class EditorEngine(initialText: String = "") {
         return chars
     }
 
+    // --- 光标导航 ----------------------------------------------------------------------------
+
+    fun moveCaretHorizontally(dir: Int, extend: Boolean) {
+        if (!extend && !selection.isEmpty) {
+            setCursor(if (dir < 0) selStart else selEnd)
+            return
+        }
+        val from = selEnd
+        val target = if (dir < 0) previousCodePointPosition(from) else nextCodePointPosition(from)
+        val to = target ?: from
+        if (extend) setSelection(selStart, to) else setCursor(to)
+    }
+
+    fun moveCaretVertically(dir: Int, extend: Boolean) {
+        val from = selEnd
+        val targetLine = (from.line + dir).coerceIn(0, buffer.lineCount - 1)
+        val targetCol = from.column.coerceAtMost(buffer.lineLength(targetLine))
+        val to = TextPosition(targetLine, targetCol)
+        if (extend) setSelection(selStart, to) else setCursor(to)
+    }
+
+    // --- 选择文本 / IME getter ---------------------------------------------------------------
+
+    fun selectedText(): String? = if (selection.isEmpty) null else buffer.textInRange(selection)
+
+    fun textBeforeCursor(n: Int): CharSequence = textBeforeCursorString(n.coerceAtLeast(0))
+
+    fun textAfterCursor(n: Int): CharSequence = textAfterCursorString(n.coerceAtLeast(0))
+
+    fun wordRangeAt(pos: TextPosition, isWordChar: (Char) -> Boolean = Char::isLetterOrDigit): TextRange {
+        val p = buffer.clamp(pos)
+        val line = buffer.lineText(p.line)
+        var s = p.column
+        var e = p.column
+        while (s > 0 && isWordChar(line[s - 1])) s--
+        while (e < line.length && isWordChar(line[e])) e++
+        return TextRange(TextPosition(p.line, s), TextPosition(p.line, e))
+    }
+
     // --- 内部辅助 ----------------------------------------------------------------------------
 
     private fun cursorAfterInsert(insertStart: TextPosition, newCursorPosition: Int, insertedEnd: TextPosition): TextPosition {
