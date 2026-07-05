@@ -2,35 +2,26 @@ package top.yukonga.scripta.editor
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Stable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 
 /**
- * Owns the editor's text model and exposes it to callers on demand.
- *
- * The public contract is pull-based: callers read the current text via [getText] when they need it
- * (e.g. on save), rather than through a per-keystroke callback.
- *
- * SCAFFOLD STATUS: the model is a single [String] here. The real controller will back it with the
- * line-oriented buffer (sora `ContentLine` style) so edits are O(changed lines), not O(document).
+ * 编辑器文本模型的公开壳。契约是拉模型：调用方需要时用 [getText]（如保存时）取，而非每键回调。
+ * 内部由 [EditorEngine] 承载全部编辑/选择/IME 语义。
  */
 @Stable
 class CodeEditorController internal constructor() {
 
-    internal var text: String by mutableStateOf("")
-        private set
+    internal val engine: EditorEngine = EditorEngine()
 
-    /** Pull the current document text from the model. */
-    fun getText(): String = text
+    /** 拉取当前文档文本。 */
+    fun getText(): String = engine.getText()
 
-    /** Replace the whole document. Used by [CodeEditor] to seed the initial text. */
+    /** 替换整篇。供 [CodeEditor] 播种初始文本。 */
     internal fun setText(value: String) {
-        if (text != value) text = value
+        if (engine.getText() != value) engine.setText(value)
     }
 }
 
-/** Remembers a [CodeEditorController] for the lifetime of the composition. */
+/** 记住一个 [CodeEditorController]，生命周期与组合一致。 */
 @Composable
 fun rememberCodeEditorController(): CodeEditorController = remember { CodeEditorController() }
