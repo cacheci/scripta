@@ -2,6 +2,7 @@ package top.yukonga.scripta.editor.render
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -38,6 +39,10 @@ fun EditorCanvas(
     layoutFor: (Int) -> TextLayoutResult?,
     modifier: Modifier = Modifier,
 ) {
+    // 行号 layout 缓存：行号只依赖行下标与 numberStyle，draw 里逐帧重测会击穿 TextMeasurer 仅 8 条的
+    // 内部缓存（可见行常几十行、必然大量 miss）。numberStyle 变化（字号/配色）时整表失效；超上限即清空，
+    // 防止长时间滚动大文件时无界增长。缓存的是与逐帧重测完全相同的 layout，输出不变、仅省掉重复布局。
+    val numberLayoutCache = remember(numberStyle) { HashMap<Int, TextLayoutResult>() }
     Canvas(modifier) {
         drawRect(colors.background, topLeft = Offset.Zero, size = size)
         drawRect(colors.gutterBackground, topLeft = Offset.Zero, size = Size(gutterWidthPx, size.height))
@@ -77,8 +82,9 @@ fun EditorCanvas(
                 }
                 // 正文（含换行后的多视觉行）
                 drawText(layout, color = colors.foreground, topLeft = Offset(textX, textTop))
-                // 行号（基线对齐到正文基线）
-                val num = textMeasurer.measure((line + 1).toString(), numberStyle)
+                // 行号（基线对齐到正文基线）；命中缓存则跳过重测
+                if (numberLayoutCache.size > 4096) numberLayoutCache.clear()
+                val num = numberLayoutCache.getOrPut(line) { textMeasurer.measure((line + 1).toString(), numberStyle) }
                 val numTop = top + (refBaselinePx - num.firstBaseline)
                 drawText(num, color = colors.gutterForeground, topLeft = Offset(gutterWidthPx - padXPx - num.size.width, numTop))
             }
