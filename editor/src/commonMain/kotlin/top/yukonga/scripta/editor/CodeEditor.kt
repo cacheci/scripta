@@ -42,6 +42,7 @@ import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.text.style.LineHeightStyle
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -77,9 +78,14 @@ fun CodeEditor(
 
     // 双指缩放调整的字号（sp）。行高、gutter、layout 随之联动重算。
     var fontSizeSp by remember { mutableStateOf(14f) }
-    val lineHeightSp = fontSizeSp * 1.4f
-    val textStyle = remember(colors, fontSizeSp) { TextStyle(color = colors.foreground, fontFamily = FontFamily.Monospace, fontSize = fontSizeSp.sp, lineHeight = lineHeightSp.sp) }
-    val numberStyle = remember(colors, fontSizeSp) { TextStyle(color = colors.gutterForeground, fontFamily = FontFamily.Monospace, fontSize = (fontSizeSp - 1f).coerceAtLeast(6f).sp, lineHeight = lineHeightSp.sp) }
+    val lineHeightSp = fontSizeSp * 1.5f
+    // trim = None 让 lineHeight 对「单行」也生效，否则默认 Trim.Both 会让单行退回字体自然高度，
+    // 中文回退字体度量更大 -> 含中文的行更高、错位。Center 让内容在统一行高内居中。
+    val lineHeightStyle = remember {
+        LineHeightStyle(alignment = LineHeightStyle.Alignment.Center, trim = LineHeightStyle.Trim.None)
+    }
+    val textStyle = remember(colors, fontSizeSp) { TextStyle(color = colors.foreground, fontFamily = FontFamily.Monospace, fontSize = fontSizeSp.sp, lineHeight = lineHeightSp.sp, lineHeightStyle = lineHeightStyle) }
+    val numberStyle = remember(colors, fontSizeSp) { TextStyle(color = colors.gutterForeground, fontFamily = FontFamily.Monospace, fontSize = (fontSizeSp - 1f).coerceAtLeast(6f).sp, lineHeight = lineHeightSp.sp, lineHeightStyle = lineHeightStyle) }
     val lineHeightPx = with(density) { lineHeightSp.sp.toPx() }
     val padXPx = with(density) { 8.dp.toPx() }
 
