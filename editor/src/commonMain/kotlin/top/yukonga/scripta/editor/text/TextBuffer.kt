@@ -63,8 +63,9 @@ class TextBuffer(initialText: String = "") {
         val suffix = lines[e.line].substring(e.column)
         val inserted = splitToLines(replacement)
 
-        // 删除 [s.line, e.line]，用 prefix + inserted + suffix 重建。
-        for (i in e.line downTo s.line) lines.removeAt(i)
+        // 删除 [s.line, e.line]，用 prefix + inserted + suffix 重建。subList().clear() 走一次整体
+        // 搬移（ArrayList 内部 System.arraycopy），避免逐行 removeAt 的 O(删除行数 × 其后行数)。
+        lines.subList(s.line, e.line + 1).clear()
         val rebuilt = ArrayList<StringBuilder>(inserted.size)
         if (inserted.size == 1) {
             rebuilt.add(StringBuilder(prefix).append(inserted[0]).append(suffix))
