@@ -188,6 +188,10 @@ fun CodeEditor(
 
     fun positionAt(offset: Offset): TextPosition = positionAtWithScroll(offset, hitScrollY.value, hitScrollX.value)
 
+    // 手势闭包由 pointerInput(engine) 固定，不随字号/换行/行高变化重启。用 rememberUpdatedState 让它
+    // 始终调「当前帧」的 positionAt（内含最新的 lineHeightPx / 视觉行索引 / softWrap / layout）。
+    val positionAtLive = rememberUpdatedState<(Offset) -> TextPosition> { positionAt(it) }
+
     // 选区拖拽到视口上/下热区时，按帧持续滚动并同步延伸选区；速度随进入热区的深度线性增大。
     LaunchedEffect(selectionDragPos != null) {
         if (selectionDragPos == null) return@LaunchedEffect
@@ -264,8 +268,8 @@ fun CodeEditor(
             .then(
                 if (readOnly) Modifier else Modifier.pointerInput(engine) {
                     detectTapGestures(
-                        onTap = { p -> engine.setCursor(positionAt(p)); focusRequester.requestFocus(); engine.requestShowKeyboard?.invoke() },
-                        onDoubleTap = { p -> val w = engine.wordRangeAt(positionAt(p)); engine.setSelection(w.start, w.end); focusRequester.requestFocus() },
+                        onTap = { p -> engine.setCursor(positionAtLive.value(p)); focusRequester.requestFocus(); engine.requestShowKeyboard?.invoke() },
+                        onDoubleTap = { p -> val w = engine.wordRangeAt(positionAtLive.value(p)); engine.setSelection(w.start, w.end); focusRequester.requestFocus() },
                     )
                 }
             )
@@ -276,7 +280,7 @@ fun CodeEditor(
                     // selectionDragPos 驱动的边缘自动滚动 effect 接管。
                     detectDragGesturesAfterLongPress(
                         onDragStart = { p ->
-                            val pos = positionAt(p)
+                            val pos = positionAtLive.value(p)
                             selectionAnchor = pos
                             val w = engine.wordRangeAt(pos)
                             engine.setSelection(w.start, w.end)
@@ -285,7 +289,7 @@ fun CodeEditor(
                         },
                         onDrag = { change, _ ->
                             selectionDragPos = change.position
-                            selectionAnchor?.let { engine.setSelection(it, positionAt(change.position)) }
+                            selectionAnchor?.let { engine.setSelection(it, positionAtLive.value(change.position)) }
                         },
                         onDragEnd = { selectionDragPos = null },
                         onDragCancel = { selectionDragPos = null },
