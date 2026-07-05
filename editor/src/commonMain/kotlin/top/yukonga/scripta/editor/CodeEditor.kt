@@ -205,6 +205,9 @@ fun CodeEditor(
     // 始终调「当前帧」的 positionAt（内含最新的 lineHeightPx / 视觉行索引 / softWrap / layout）。
     val positionAtLive = rememberUpdatedState<(Offset) -> TextPosition> { positionAt(it) }
 
+    // 只读态提升为「当前帧」值，供固定 key 的手势闭包读取，避免 readOnly 切换后闭包按旧值捕获。
+    val readOnlyLive = rememberUpdatedState(readOnly)
+
     // 边缘自动滚动 effect 的 key 是 Boolean、不随重组刷新，循环体会按值捕获滚动上限。软换行下自动滚动
     // 驶入未测量区域时真实 maxScrollY 会随测量增大，用 rememberUpdatedState 让循环读到当前帧上限，
     // 否则会停在旧估算的「假底部」、选不到文档末尾（与 hitScrollY 同类修复）。
@@ -290,37 +293,40 @@ fun CodeEditor(
             }
             .focusRequester(focusRequester)
             .focusable(interactionSource = interaction)
-            .then(
-                if (readOnly) Modifier else Modifier.pointerInput(engine) {
-                    detectTapGestures(
-                        onTap = { p -> engine.setCursor(positionAtLive.value(p)); focusRequester.requestFocus(); engine.requestShowKeyboard?.invoke() },
-                        onDoubleTap = { p -> val w = engine.wordRangeAt(positionAtLive.value(p)); engine.setSelection(w.start, w.end); focusRequester.requestFocus() },
-                    )
-                }
-            )
-            .then(
-                if (readOnly) Modifier else Modifier.pointerInput(engine) {
-                    // 长按才进入选择：长按处先选中该词，随后拖拽扩展选区。普通拖拽不在此消费，
-                    // 于是落到上面的 scrollable 去滚动页面（移动端标准行为）。拖到上下边缘由
-                    // selectionDragPos 驱动的边缘自动滚动 effect 接管。
-                    detectDragGesturesAfterLongPress(
-                        onDragStart = { p ->
-                            val pos = positionAtLive.value(p)
-                            selectionAnchor = pos
-                            val w = engine.wordRangeAt(pos)
-                            engine.setSelection(w.start, w.end)
-                            focusRequester.requestFocus()
-                            selectionDragPos = p
-                        },
-                        onDrag = { change, _ ->
-                            selectionDragPos = change.position
-                            selectionAnchor?.let { engine.setSelection(it, positionAtLive.value(change.position)) }
-                        },
-                        onDragEnd = { selectionDragPos = null },
-                        onDragCancel = { selectionDragPos = null },
-                    )
-                }
-            )
+            // 点按/长按手势在只读模式下同样挂载：可放置光标、选词、拖拽扩选以便复制；只读时仅
+            // 不弹软键盘、不接受任何编辑。requestShowKeyboard 用 readOnlyLive 读当前帧值（闭包由
+            // pointerInput(engine) 固定、不随 readOnly 切换重启）。
+            .pointerInput(engine) {
+                detectTapGestures(
+                    onTap = { p ->
+                        engine.setCursor(positionAtLive.value(p))
+                        focusRequester.requestFocus()
+                        if (!readOnlyLive.value) engine.requestShowKeyboard?.invoke()
+                    },
+                    onDoubleTap = { p -> val w = engine.wordRangeAt(positionAtLive.value(p)); engine.setSelection(w.start, w.end); focusRequester.requestFocus() },
+                )
+            }
+            .pointerInput(engine) {
+                // 长按才进入选择：长按处先选中该词，随后拖拽扩展选区。普通拖拽不在此消费，
+                // 于是落到上面的 scrollable 去滚动页面（移动端标准行为）。拖到上下边缘由
+                // selectionDragPos 驱动的边缘自动滚动 effect 接管。只读模式同样可用（纯选择、不改文档）。
+                detectDragGesturesAfterLongPress(
+                    onDragStart = { p ->
+                        val pos = positionAtLive.value(p)
+                        selectionAnchor = pos
+                        val w = engine.wordRangeAt(pos)
+                        engine.setSelection(w.start, w.end)
+                        focusRequester.requestFocus()
+                        selectionDragPos = p
+                    },
+                    onDrag = { change, _ ->
+                        selectionDragPos = change.position
+                        selectionAnchor?.let { engine.setSelection(it, positionAtLive.value(change.position)) }
+                    },
+                    onDragEnd = { selectionDragPos = null },
+                    onDragCancel = { selectionDragPos = null },
+                )
+            }
     ) {
         EditorCanvas(
             engine = engine,

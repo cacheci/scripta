@@ -32,6 +32,7 @@ class MainActivity : ComponentActivity() {
             val controller = rememberCodeEditorController()
             var text by remember { mutableStateOf(SAMPLE_YAML) }
             var wrap by remember { mutableStateOf(false) }
+            var readOnly by remember { mutableStateOf(false) }
             Column(Modifier.fillMaxSize().systemBarsPadding()) {
                 Row(Modifier.fillMaxWidth().background(Color(0xFF2D2D30)).padding(8.dp)) {
                     BasicText(
@@ -44,12 +45,18 @@ class MainActivity : ComponentActivity() {
                         style = TextStyle(color = Color(0xFF6FCF97), fontSize = 13.sp),
                         modifier = Modifier.clickable { wrap = !wrap },
                     )
+                    BasicText(
+                        text = if (readOnly) "  只读: 开  " else "  只读: 关  ",
+                        style = TextStyle(color = Color(0xFFE0A458), fontSize = 13.sp),
+                        modifier = Modifier.clickable { readOnly = !readOnly },
+                    )
                 }
                 CodeEditor(
                     controller = controller,
                     initialText = text,
                     language = EditorLanguage.Yaml,
                     softWrap = wrap,
+                    readOnly = readOnly,
                     modifier = Modifier.fillMaxWidth().weight(1f),
                 )
             }
