@@ -94,8 +94,9 @@ fun CodeEditor(
     // 导致的整行基线偏移（含中文的行里英文向下偏移）。
     val refBaselinePx = remember(textStyle) { measurer.measure("Ag", textStyle).firstBaseline }
 
-    // 订阅编辑版本，驱动重组（layoutFor 内按行内容失效缓存）
-    val version = engine.buffer.version
+    // 读取 buffer.version（快照 state）订阅编辑：内容/行数变化后整体重组，gutter 宽、内容高、可见窗口随之
+    // 刷新。此读取本身即订阅，勿删。逐行 layout 缓存不再以它失效（否则每键整表重测），失效见 layoutFor。
+    engine.buffer.version
     val lineCount = engine.buffer.lineCount
 
     val gutterDigits = EditorGeometry.gutterDigits(lineCount)
@@ -115,12 +116,22 @@ fun CodeEditor(
     // 视觉行索引：仅换行模式使用；行数/宽度/模式/字号变化即重建（未测量的行按 1 行估算）。
     val rowIndex = remember(softWrap, widthBucket, lineCount, fontSizeSp) { VisualRowIndex(lineCount) }
 
-    // 逐行 layout 缓存（内容/宽度/模式/字号变化即失效）。换行时带宽度约束测量并回填视觉行数。
-    val layoutCache = remember(version, softWrap, widthBucket, fontSizeSp) { HashMap<Int, Pair<String, TextLayoutResult>>() }
+    // 逐行 layout 缓存：只在宽度/模式/字号变化时整表失效，不再以 version 失效——否则每敲一个字符整表丢弃、
+    // 可见行全部重测。失效改由下方按行内容比对精确处理（内容变了才重测；插入/删除行的下标平移也会因内容
+    // 不符自然重测）。超上限即清空，防止长时间滚动大文件无界增长。
+    val layoutCache = remember(softWrap, widthBucket, fontSizeSp) { HashMap<Int, Pair<String, TextLayoutResult>>() }
     fun layoutFor(line: Int): TextLayoutResult? {
         if (line < 0 || line >= engine.buffer.lineCount) return null
         val content = engine.buffer.lineText(line)
-        layoutCache[line]?.let { if (it.first == content) return it.second }
+        layoutCache[line]?.let {
+            if (it.first == content) {
+                // 命中也回填视觉行数：rowIndex 仍以 lineCount 为 key、行数变化时会重建为 1 行估算，而命中
+                // 分支不经下面的 setRows，需在此补上，否则软换行的行高/定位会退回估算值。
+                if (softWrap) rowIndex.setRows(line, it.second.lineCount)
+                return it.second
+            }
+        }
+        if (layoutCache.size > 4096) layoutCache.clear()
         val measured = if (softWrap) {
             measurer.measure(content, textStyle, softWrap = true, constraints = Constraints(maxWidth = textAreaWidthPx.toInt().coerceAtLeast(1)))
         } else {
