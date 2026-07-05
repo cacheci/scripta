@@ -281,6 +281,9 @@ fun CodeEditor(
                         Key.Backspace -> { if (!readOnly) engine.backspace(); true }
                         Key.Delete -> { if (!readOnly) engine.deleteForward(); true }
                         Key.Enter, Key.NumPadEnter -> { if (!readOnly) engine.insert("\n"); true }
+                        // 可编辑时 Tab 插入缩进并消费，防止事件回落到 Compose 默认焦点遍历、把焦点带走
+                        // （代码/YAML 编辑器里 Tab 跳焦点是致命的意外行为）。只读时放行，让 Tab 正常切换焦点。
+                        Key.Tab -> if (readOnly) false else { engine.insert("    "); true }
                         else -> false
                     }
                 }
