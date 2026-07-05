@@ -15,7 +15,9 @@ import top.yukonga.scripta.editor.EditorEngine
 /**
  * 只绘制可见行的画布。从 [firstVisibleLine] 向下按 [lineTopPx] 走，直到超出视口。行高取自各行 layout
  * （换行模式下一行可占多视觉行），因此对换行/不换行统一处理。gutter 固定不随横向滚动。
- * 选择用 [TextLayoutResult.getPathForRange]（跨视觉行正确），光标/预编辑用 [TextLayoutResult.getCursorRect]。
+ *
+ * 每行文字/光标/选区/预编辑都按 `refBaselinePx - layout.firstBaseline` 做基线平移，使所有行（中/英/混排）
+ * 的基线落在同一水平线，抵消 CJK/拉丁字体度量差导致的整行基线偏移。
  */
 @Composable
 fun EditorCanvas(
@@ -31,6 +33,7 @@ fun EditorCanvas(
     scrollY: Float,
     firstVisibleLine: Int,
     lineTopPx: (Int) -> Float,
+    refBaselinePx: Float,
     caretVisible: Boolean,
     layoutFor: (Int) -> TextLayoutResult?,
     modifier: Modifier = Modifier,
@@ -51,8 +54,9 @@ fun EditorCanvas(
             val layout = layoutFor(line)
             if (layout == null) { line++; continue }
             val h = layout.size.height.toFloat()
+            val textTop = top + (refBaselinePx - layout.firstBaseline) // 基线对齐后的绘制顶
             if (top + h > 0f) {
-                // 当前行淡色高亮（无选择时）
+                // 当前行淡色高亮（无选择时）——按槽位（非文本）绘制
                 if (sel.isEmpty && sel.start.line == line) {
                     drawRect(colors.gutterBackground, topLeft = Offset(gutterWidthPx, top), size = Size(size.width - gutterWidthPx, h))
                 }
@@ -63,20 +67,20 @@ fun EditorCanvas(
                     val cE = if (line == sel.end.line) sel.end.column else lineLen
                     if (cE > cS) {
                         val path = layout.getPathForRange(cS, cE)
-                        path.translate(Offset(textX, top))
+                        path.translate(Offset(textX, textTop))
                         drawPath(path, colors.selection)
                     }
                     if (line != sel.end.line) {
-                        // 该行的换行符也在选区内：行尾补一小块提示
                         val cr = layout.getCursorRect(lineLen)
-                        drawRect(colors.selection, topLeft = Offset(textX + cr.left, top + cr.top), size = Size(lineHeightPx * 0.4f, cr.bottom - cr.top))
+                        drawRect(colors.selection, topLeft = Offset(textX + cr.left, textTop + cr.top), size = Size(lineHeightPx * 0.4f, cr.bottom - cr.top))
                     }
                 }
                 // 正文（含换行后的多视觉行）
-                drawText(layout, color = colors.foreground, topLeft = Offset(textX, top))
-                // 行号（对齐到文档行顶部）
+                drawText(layout, color = colors.foreground, topLeft = Offset(textX, textTop))
+                // 行号（基线对齐到正文基线）
                 val num = textMeasurer.measure((line + 1).toString(), numberStyle)
-                drawText(num, color = colors.gutterForeground, topLeft = Offset(gutterWidthPx - padXPx - num.size.width, top))
+                val numTop = top + (refBaselinePx - num.firstBaseline)
+                drawText(num, color = colors.gutterForeground, topLeft = Offset(gutterWidthPx - padXPx - num.size.width, numTop))
             }
             line++
         }
@@ -85,11 +89,12 @@ fun EditorCanvas(
         comp?.let { c ->
             val layout = layoutFor(c.start.line)
             if (layout != null) {
-                val top = lineTopPx(c.start.line) - scrollY
-                val startRect = layout.getCursorRect(c.start.column.coerceIn(0, engine.buffer.lineLength(c.start.line)))
-                val endRect = layout.getCursorRect(c.end.column.coerceIn(0, engine.buffer.lineLength(c.start.line)))
+                val textTop = lineTopPx(c.start.line) - scrollY + (refBaselinePx - layout.firstBaseline)
+                val len = engine.buffer.lineLength(c.start.line)
+                val startRect = layout.getCursorRect(c.start.column.coerceIn(0, len))
+                val endRect = layout.getCursorRect(c.end.column.coerceIn(0, len))
                 if (startRect.top == endRect.top) { // 同一视觉行
-                    val y = top + startRect.bottom - 2f
+                    val y = textTop + startRect.bottom - 2f
                     drawLine(colors.cursor, Offset(textX + startRect.left, y), Offset(textX + endRect.left, y), strokeWidth = 3f)
                 }
             }
@@ -99,9 +104,9 @@ fun EditorCanvas(
         if (sel.isEmpty && caretVisible) {
             val layout = layoutFor(sel.start.line)
             if (layout != null) {
-                val top = lineTopPx(sel.start.line) - scrollY
+                val textTop = lineTopPx(sel.start.line) - scrollY + (refBaselinePx - layout.firstBaseline)
                 val cr = layout.getCursorRect(sel.start.column.coerceIn(0, engine.buffer.lineLength(sel.start.line)))
-                drawLine(colors.cursor, Offset(textX + cr.left, top + cr.top + 1f), Offset(textX + cr.left, top + cr.bottom - 1f), strokeWidth = 2.5f)
+                drawLine(colors.cursor, Offset(textX + cr.left, textTop + cr.top + 1f), Offset(textX + cr.left, textTop + cr.bottom - 1f), strokeWidth = 2.5f)
             }
         }
     }

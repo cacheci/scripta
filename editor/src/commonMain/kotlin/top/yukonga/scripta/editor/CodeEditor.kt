@@ -84,10 +84,15 @@ fun CodeEditor(
     val lineHeightStyle = remember {
         LineHeightStyle(alignment = LineHeightStyle.Alignment.Center, trim = LineHeightStyle.Trim.None)
     }
-    val textStyle = remember(colors, fontSizeSp) { TextStyle(color = colors.foreground, fontFamily = FontFamily.Monospace, fontSize = fontSizeSp.sp, lineHeight = lineHeightSp.sp, lineHeightStyle = lineHeightStyle) }
-    val numberStyle = remember(colors, fontSizeSp) { TextStyle(color = colors.gutterForeground, fontFamily = FontFamily.Monospace, fontSize = (fontSizeSp - 1f).coerceAtLeast(6f).sp, lineHeight = lineHeightSp.sp, lineHeightStyle = lineHeightStyle) }
+    // Android 关闭 includeFontPadding，消除 CJK 回退字体导致的行内英文基线下偏。
+    val platformTextStyle = remember { editorNoFontPaddingStyle() }
+    val textStyle = remember(colors, fontSizeSp) { TextStyle(color = colors.foreground, fontFamily = FontFamily.Monospace, fontSize = fontSizeSp.sp, lineHeight = lineHeightSp.sp, lineHeightStyle = lineHeightStyle, platformStyle = platformTextStyle) }
+    val numberStyle = remember(colors, fontSizeSp) { TextStyle(color = colors.gutterForeground, fontFamily = FontFamily.Monospace, fontSize = (fontSizeSp - 1f).coerceAtLeast(6f).sp, lineHeight = lineHeightSp.sp, lineHeightStyle = lineHeightStyle, platformStyle = platformTextStyle) }
     val lineHeightPx = with(density) { lineHeightSp.sp.toPx() }
     val padXPx = with(density) { 8.dp.toPx() }
+    // 统一基线：以拉丁参考行的 firstBaseline 为目标，各行绘制时按差值平移，抵消 CJK/拉丁字体度量差
+    // 导致的整行基线偏移（含中文的行里英文向下偏移）。
+    val refBaselinePx = remember(textStyle) { measurer.measure("Ag", textStyle).firstBaseline }
 
     // 订阅编辑版本，驱动重组（layoutFor 内按行内容失效缓存）
     val version = engine.buffer.version
@@ -187,8 +192,10 @@ fun CodeEditor(
         val ln = lineAtPx(offset.y + sY)
         val layout = layoutFor(ln)
         val localX = (offset.x - hitGutterWidth.value - padXPx + sX).coerceAtLeast(0f)
-        val localY = ((offset.y + sY) - lineTopPx(ln)).coerceAtLeast(0f)
-        val col = layout?.getOffsetForPosition(Offset(localX, localY)) ?: 0
+        // 撤销绘制时的基线平移，换回该行 layout 自身坐标再命中。
+        val shift = refBaselinePx - (layout?.firstBaseline ?: refBaselinePx)
+        val layoutY = (offset.y + sY) - lineTopPx(ln) - shift
+        val col = layout?.getOffsetForPosition(Offset(localX, layoutY)) ?: 0
         return TextPosition(ln, col.coerceAtMost(engine.buffer.lineLength(ln)))
     }
 
@@ -316,6 +323,7 @@ fun CodeEditor(
             scrollY = clampedScrollY,
             firstVisibleLine = firstVisibleLine,
             lineTopPx = ::lineTopPx,
+            refBaselinePx = refBaselinePx,
             caretVisible = !readOnly && blink,
             layoutFor = ::layoutFor,
             modifier = Modifier.fillMaxSize(),
