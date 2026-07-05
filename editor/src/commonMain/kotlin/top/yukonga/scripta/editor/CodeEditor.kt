@@ -3,7 +3,7 @@ package top.yukonga.scripta.editor
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.Orientation
-import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.rememberScrollableState
 import androidx.compose.foundation.gestures.scrollable
@@ -15,6 +15,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
@@ -125,10 +126,16 @@ fun CodeEditor(
         else if (caretY + lineHeightPx > scrollY + viewportHeight) scrollY = caretY + lineHeightPx - viewportHeight
     }
 
+    // 手势闭包由 pointerInput(engine) 固定、不随滚动重启，会按值捕获几何量。用 rememberUpdatedState
+    // 让命中测试读到「当前帧」的滚动与 gutter 宽度，否则滚动后点击会命中错误行、并触发自动滚动跳变。
+    val hitScrollY = rememberUpdatedState(clampedScrollY)
+    val hitScrollX = rememberUpdatedState(clampedScrollX)
+    val hitGutterWidth = rememberUpdatedState(gutterWidthPx)
+
     fun positionAt(offset: Offset): TextPosition {
-        val ln = EditorGeometry.lineAtY(offset.y, clampedScrollY, lineHeightPx, engine.buffer.lineCount)
+        val ln = EditorGeometry.lineAtY(offset.y, hitScrollY.value, lineHeightPx, engine.buffer.lineCount)
         val layout = layoutFor(ln)
-        val localX = (offset.x - gutterWidthPx - padXPx + clampedScrollX).coerceAtLeast(0f)
+        val localX = (offset.x - hitGutterWidth.value - padXPx + hitScrollX.value).coerceAtLeast(0f)
         val col = layout?.getOffsetForPosition(Offset(localX, layout.size.height / 2f)) ?: 0
         return TextPosition(ln, col.coerceAtMost(engine.buffer.lineLength(ln)))
     }
@@ -177,9 +184,16 @@ fun CodeEditor(
             )
             .then(
                 if (readOnly) Modifier else Modifier.pointerInput(engine) {
+                    // 长按才进入选择：长按处先选中该词，随后拖拽扩展选区。普通拖拽不在此消费，
+                    // 于是落到上面的 scrollable 去滚动页面（移动端标准行为）。
                     var anchor = TextPosition(0, 0)
-                    detectDragGestures(
-                        onDragStart = { p -> anchor = positionAt(p); engine.setCursor(anchor); focusRequester.requestFocus() },
+                    detectDragGesturesAfterLongPress(
+                        onDragStart = { p ->
+                            anchor = positionAt(p)
+                            val w = engine.wordRangeAt(anchor)
+                            engine.setSelection(w.start, w.end)
+                            focusRequester.requestFocus()
+                        },
                         onDrag = { change, _ -> engine.setSelection(anchor, positionAt(change.position)) },
                     )
                 }
