@@ -18,6 +18,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -82,7 +83,7 @@ fun CodeEditor(
     val clipboard = LocalClipboardManager.current
 
     // 双指缩放调整的字号（sp）。行高、gutter、layout 随之联动重算。
-    var fontSizeSp by remember { mutableStateOf(14f) }
+    var fontSizeSp by remember { mutableFloatStateOf(14f) }
     val lineHeightSp = fontSizeSp * 1.5f
     // trim = None 让 lineHeight 对「单行」也生效，否则默认 Trim.Both 会让单行退回字体自然高度，
     // 中文回退字体度量更大 -> 含中文的行更高、错位。Center 让内容在统一行高内居中。
@@ -91,8 +92,26 @@ fun CodeEditor(
     }
     // Android 关闭 includeFontPadding，消除 CJK 回退字体导致的行内英文基线下偏。
     val platformTextStyle = remember { editorNoFontPaddingStyle() }
-    val textStyle = remember(colors, fontSizeSp) { TextStyle(color = colors.foreground, fontFamily = FontFamily.Monospace, fontSize = fontSizeSp.sp, lineHeight = lineHeightSp.sp, lineHeightStyle = lineHeightStyle, platformStyle = platformTextStyle) }
-    val numberStyle = remember(colors, fontSizeSp) { TextStyle(color = colors.gutterForeground, fontFamily = FontFamily.Monospace, fontSize = (fontSizeSp - 1f).coerceAtLeast(6f).sp, lineHeight = lineHeightSp.sp, lineHeightStyle = lineHeightStyle, platformStyle = platformTextStyle) }
+    val textStyle = remember(colors, fontSizeSp) {
+        TextStyle(
+            color = colors.foreground,
+            fontFamily = FontFamily.Monospace,
+            fontSize = fontSizeSp.sp,
+            lineHeight = lineHeightSp.sp,
+            lineHeightStyle = lineHeightStyle,
+            platformStyle = platformTextStyle
+        )
+    }
+    val numberStyle = remember(colors, fontSizeSp) {
+        TextStyle(
+            color = colors.gutterForeground,
+            fontFamily = FontFamily.Monospace,
+            fontSize = (fontSizeSp - 1f).coerceAtLeast(6f).sp,
+            lineHeight = lineHeightSp.sp,
+            lineHeightStyle = lineHeightStyle,
+            platformStyle = platformTextStyle
+        )
+    }
     val lineHeightPx = with(density) { lineHeightSp.sp.toPx() }
     val padXPx = with(density) { 8.dp.toPx() }
     // 统一基线：以拉丁参考行的 firstBaseline 为目标，各行绘制时按差值平移，抵消 CJK/拉丁字体度量差
@@ -138,7 +157,12 @@ fun CodeEditor(
         }
         if (layoutCache.size > 4096) layoutCache.clear()
         val measured = if (softWrap) {
-            measurer.measure(content, textStyle, softWrap = true, constraints = Constraints(maxWidth = textAreaWidthPx.toInt().coerceAtLeast(1)))
+            measurer.measure(
+                content,
+                textStyle,
+                softWrap = true,
+                constraints = Constraints(maxWidth = textAreaWidthPx.toInt().coerceAtLeast(1))
+            )
         } else {
             measurer.measure(content, textStyle, softWrap = false)
         }
@@ -174,10 +198,12 @@ fun CodeEditor(
     val maxScrollX = if (softWrap) 0f else (gutterWidthPx + padXPx * 2 + maxLineWidth - viewportWidth).coerceAtLeast(0f)
 
     val vScroll = rememberScrollableState { delta ->
-        val c = (scrollY - delta).coerceIn(0f, maxScrollY); val moved = scrollY - c; scrollY = c; moved
+        val c = (scrollY - delta).coerceIn(0f, maxScrollY)
+        val moved = scrollY - c; scrollY = c; moved
     }
     val hScroll = rememberScrollableState { delta ->
-        val c = (scrollX - delta).coerceIn(0f, maxScrollX); val moved = scrollX - c; scrollX = c; moved
+        val c = (scrollX - delta).coerceIn(0f, maxScrollX)
+        val moved = scrollX - c; scrollX = c; moved
     }
 
     // 选区拖拽状态（提升到组合级，供边缘自动滚动 effect 读取）。
@@ -187,7 +213,9 @@ fun CodeEditor(
     var blink by remember { mutableStateOf(true) }
     LaunchedEffect(engine.selection, readOnly) {
         blink = true
-        if (!readOnly) while (true) { delay(500.milliseconds); blink = !blink }
+        if (!readOnly) while (true) {
+            delay(500.milliseconds); blink = !blink
+        }
     }
 
     LaunchedEffect(engine.selection, viewportHeight) {
@@ -300,26 +328,61 @@ fun CodeEditor(
                 if (ev.isCtrlPressed) {
                     when (ev.key) {
                         // 全选/复制在只读模式下依然可用（只读恰恰最需要可选可复制）。
-                        Key.A -> { engine.selectAll(); true }
-                        Key.C -> { engine.selectedText()?.let { clipboard.setText(AnnotatedString(it)) }; true }
+                        Key.A -> {
+                            engine.selectAll(); true
+                        }
+
+                        Key.C -> {
+                            engine.selectedText()?.let { clipboard.setText(AnnotatedString(it)) }; true
+                        }
                         // 剪切/粘贴会改动文档，只读时消费事件但不执行。
-                        Key.X -> { if (!readOnly) engine.selectedText()?.let { clipboard.setText(AnnotatedString(it)); engine.replaceSelection("") }; true }
-                        Key.V -> { if (!readOnly) clipboard.getText()?.text?.let { engine.insert(it) }; true }
+                        Key.X -> {
+                            if (!readOnly) engine.selectedText()
+                                ?.let { clipboard.setText(AnnotatedString(it)); engine.replaceSelection("") }; true
+                        }
+
+                        Key.V -> {
+                            if (!readOnly) clipboard.getText()?.text?.let { engine.insert(it) }; true
+                        }
+
                         else -> false
                     }
                 } else {
                     val shift = ev.isShiftPressed
                     when (ev.key) {
-                        Key.DirectionLeft -> { engine.moveCaretHorizontally(-1, shift); true }
-                        Key.DirectionRight -> { engine.moveCaretHorizontally(1, shift); true }
-                        Key.DirectionUp -> { engine.moveCaretVertically(-1, shift); true }
-                        Key.DirectionDown -> { engine.moveCaretVertically(1, shift); true }
-                        Key.Backspace -> { if (!readOnly) engine.backspace(); true }
-                        Key.Delete -> { if (!readOnly) engine.deleteForward(); true }
-                        Key.Enter, Key.NumPadEnter -> { if (!readOnly) engine.insert("\n"); true }
+                        Key.DirectionLeft -> {
+                            engine.moveCaretHorizontally(-1, shift); true
+                        }
+
+                        Key.DirectionRight -> {
+                            engine.moveCaretHorizontally(1, shift); true
+                        }
+
+                        Key.DirectionUp -> {
+                            engine.moveCaretVertically(-1, shift); true
+                        }
+
+                        Key.DirectionDown -> {
+                            engine.moveCaretVertically(1, shift); true
+                        }
+
+                        Key.Backspace -> {
+                            if (!readOnly) engine.backspace(); true
+                        }
+
+                        Key.Delete -> {
+                            if (!readOnly) engine.deleteForward(); true
+                        }
+
+                        Key.Enter, Key.NumPadEnter -> {
+                            if (!readOnly) engine.insert("\n"); true
+                        }
                         // 可编辑时 Tab 插入缩进并消费，防止事件回落到 Compose 默认焦点遍历、把焦点带走
                         // （代码/YAML 编辑器里 Tab 跳焦点是致命的意外行为）。只读时放行，让 Tab 正常切换焦点。
-                        Key.Tab -> if (readOnly) false else { engine.insert("    "); true }
+                        Key.Tab -> if (readOnly) false else {
+                            engine.insert("    "); true
+                        }
+
                         else -> false
                     }
                 }

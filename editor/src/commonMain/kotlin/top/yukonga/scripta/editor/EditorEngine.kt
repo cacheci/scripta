@@ -43,7 +43,9 @@ class EditorEngine(initialText: String = "") {
 
     // --- 批处理 / IME 通知 -------------------------------------------------------------------
 
-    fun beginBatch() { batchDepth++ }
+    fun beginBatch() {
+        batchDepth++
+    }
 
     fun endBatch(): Boolean {
         if (batchDepth > 0) batchDepth--
@@ -51,7 +53,9 @@ class EditorEngine(initialText: String = "") {
         return batchDepth > 0
     }
 
-    private fun maybeNotify() { if (batchDepth == 0) fireIme() }
+    private fun maybeNotify() {
+        if (batchDepth == 0) fireIme()
+    }
 
     fun fireIme() {
         val l = imeListener ?: return
@@ -116,13 +120,17 @@ class EditorEngine(initialText: String = "") {
     fun insert(text: String) = commitText(text, 1)
 
     fun backspace() {
-        if (!selection.isEmpty) { replaceRange(selection, ""); return }
+        if (!selection.isEmpty) {
+            replaceRange(selection, ""); return
+        }
         val prev = previousCodePointPosition(selStart) ?: return
         replaceRange(TextRange(prev, selStart), "")
     }
 
     fun deleteForward() {
-        if (!selection.isEmpty) { replaceRange(selection, ""); return }
+        if (!selection.isEmpty) {
+            replaceRange(selection, ""); return
+        }
         val next = nextCodePointPosition(selEnd) ?: return
         replaceRange(TextRange(selEnd, next), "")
     }

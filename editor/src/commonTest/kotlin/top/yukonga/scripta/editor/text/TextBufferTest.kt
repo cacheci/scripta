@@ -4,7 +4,8 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 
 class TextBufferTest {
-    @Test fun splitsInitialTextIntoLines() {
+    @Test
+    fun splitsInitialTextIntoLines() {
         val b = TextBuffer("a\nbb\nccc")
         assertEquals(3, b.lineCount)
         assertEquals("bb", b.lineText(1))
@@ -12,21 +13,24 @@ class TextBufferTest {
         assertEquals(TextPosition(2, 3), b.endPosition())
     }
 
-    @Test fun emptyBufferIsOneEmptyLine() {
+    @Test
+    fun emptyBufferIsOneEmptyLine() {
         val b = TextBuffer("")
         assertEquals(1, b.lineCount)
         assertEquals("", b.lineText(0))
         assertEquals(TextPosition(0, 0), b.endPosition())
     }
 
-    @Test fun replaceWithinOneLine() {
+    @Test
+    fun replaceWithinOneLine() {
         val b = TextBuffer("hello world")
         val caret = b.replace(TextRange(TextPosition(0, 0), TextPosition(0, 5)), "HI")
         assertEquals("HI world", b.lineText(0))
         assertEquals(TextPosition(0, 2), caret)
     }
 
-    @Test fun insertingNewlineSplitsLine() {
+    @Test
+    fun insertingNewlineSplitsLine() {
         val b = TextBuffer("abcd")
         val caret = b.replace(TextRange.cursor(TextPosition(0, 2)), "\n")
         assertEquals(2, b.lineCount)
@@ -35,7 +39,8 @@ class TextBufferTest {
         assertEquals(TextPosition(1, 0), caret)
     }
 
-    @Test fun replaceAcrossLinesJoins() {
+    @Test
+    fun replaceAcrossLinesJoins() {
         val b = TextBuffer("line1\nline2\nline3")
         val caret = b.replace(TextRange(TextPosition(0, 2), TextPosition(2, 2)), "X")
         assertEquals(1, b.lineCount)
@@ -43,24 +48,28 @@ class TextBufferTest {
         assertEquals(TextPosition(0, 3), caret)
     }
 
-    @Test fun textInRangeSpansNewlines() {
+    @Test
+    fun textInRangeSpansNewlines() {
         val b = TextBuffer("ab\ncd\nef")
         assertEquals("b\ncd\ne", b.textInRange(TextRange(TextPosition(0, 1), TextPosition(2, 1))))
     }
 
-    @Test fun textJoinsWithNewline() {
+    @Test
+    fun textJoinsWithNewline() {
         val b = TextBuffer("x\ny")
         assertEquals("x\ny", b.text())
     }
 
-    @Test fun versionBumpsOnEdit() {
+    @Test
+    fun versionBumpsOnEdit() {
         val b = TextBuffer("a")
         val v0 = b.version
         b.replace(TextRange.cursor(b.endPosition()), "b")
         assertEquals(v0 + 1, b.version)
     }
 
-    @Test fun setTextNormalizesCrlf() {
+    @Test
+    fun setTextNormalizesCrlf() {
         val b = TextBuffer("x")
         b.setText("p\r\nq")
         assertEquals(2, b.lineCount)

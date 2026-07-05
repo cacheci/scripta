@@ -60,7 +60,9 @@ fun EditorCanvas(
             val top = lineTopPx(line) - sY
             if (top >= size.height) break
             val layout = layoutFor(line)
-            if (layout == null) { line++; continue }
+            if (layout == null) {
+                line++; continue
+            }
             val h = layout.size.height.toFloat()
             val textTop = top + (refBaselinePx - layout.firstBaseline) // 基线对齐后的绘制顶
             if (top + h > 0f) {
@@ -80,7 +82,11 @@ fun EditorCanvas(
                     }
                     if (line != sel.end.line) {
                         val cr = layout.getCursorRect(lineLen)
-                        drawRect(colors.selection, topLeft = Offset(textX + cr.left, textTop + cr.top), size = Size(lineHeightPx * 0.4f, cr.bottom - cr.top))
+                        drawRect(
+                            colors.selection,
+                            topLeft = Offset(textX + cr.left, textTop + cr.top),
+                            size = Size(lineHeightPx * 0.4f, cr.bottom - cr.top)
+                        )
                     }
                 }
                 // 正文（含换行后的多视觉行）
@@ -116,7 +122,12 @@ fun EditorCanvas(
             if (layout != null) {
                 val textTop = lineTopPx(sel.start.line) - sY + (refBaselinePx - layout.firstBaseline)
                 val cr = layout.getCursorRect(sel.start.column.coerceIn(0, engine.buffer.lineLength(sel.start.line)))
-                drawLine(colors.cursor, Offset(textX + cr.left, textTop + cr.top + 1f), Offset(textX + cr.left, textTop + cr.bottom - 1f), strokeWidth = 2.5f)
+                drawLine(
+                    colors.cursor,
+                    Offset(textX + cr.left, textTop + cr.top + 1f),
+                    Offset(textX + cr.left, textTop + cr.bottom - 1f),
+                    strokeWidth = 2.5f
+                )
             }
         }
     }

@@ -5,7 +5,9 @@ object EditorGeometry {
     fun gutterDigits(lineCount: Int): Int {
         var digits = 1
         var n = lineCount
-        while (n >= 10) { n /= 10; digits++ }
+        while (n >= 10) {
+            n /= 10; digits++
+        }
         return maxOf(2, digits)
     }
 

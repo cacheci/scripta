@@ -13,7 +13,9 @@ class VisualRowIndex(lineCount: Int) {
     private var rowsArr = IntArray(n) { 1 }
     private var tree = IntArray(n + 1)
 
-    init { buildTree() }
+    init {
+        buildTree()
+    }
 
     /** 行数变化 / 宽度变化 / 切换换行时重建（全部回到 1 行估算）。 */
     fun reset(lineCount: Int) {
@@ -33,14 +35,18 @@ class VisualRowIndex(lineCount: Int) {
         if (delta == 0) return
         rowsArr[line] = r
         var i = line + 1
-        while (i <= n) { tree[i] += delta; i += i and (-i) }
+        while (i <= n) {
+            tree[i] += delta; i += i and (-i)
+        }
     }
 
     /** 视觉行数：行 [0, line) 的行数之和。 */
     fun rowsBefore(line: Int): Int {
         var s = 0
         var x = line.coerceIn(0, n)
-        while (x > 0) { s += tree[x]; x -= x and (-x) }
+        while (x > 0) {
+            s += tree[x]; x -= x and (-x)
+        }
         return s
     }
 

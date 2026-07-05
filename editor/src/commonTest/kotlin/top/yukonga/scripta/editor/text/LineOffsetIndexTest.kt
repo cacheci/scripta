@@ -4,7 +4,8 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 
 class LineOffsetIndexTest {
-    @Test fun offsetOfCountsNewlines() {
+    @Test
+    fun offsetOfCountsNewlines() {
         val b = TextBuffer("ab\ncd\nef")
         val idx = LineOffsetIndex(b)
         assertEquals(0, idx.offsetOf(TextPosition(0, 0)))
@@ -14,7 +15,8 @@ class LineOffsetIndexTest {
         assertEquals(8, idx.totalLength())
     }
 
-    @Test fun positionOfIsInverse() {
+    @Test
+    fun positionOfIsInverse() {
         val b = TextBuffer("ab\ncd\nef")
         val idx = LineOffsetIndex(b)
         for (off in 0..8) {
@@ -23,7 +25,8 @@ class LineOffsetIndexTest {
         assertEquals(TextPosition(1, 1), idx.positionOf(4))
     }
 
-    @Test fun offsetOfCorrectAfterEditWithInvalidation() {
+    @Test
+    fun offsetOfCorrectAfterEditWithInvalidation() {
         val b = TextBuffer("ab\ncd\nef")
         val idx = LineOffsetIndex(b)
         assertEquals(6, idx.offsetOf(TextPosition(2, 0)))

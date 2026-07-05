@@ -27,25 +27,36 @@ internal class EditorInputConnection(
     private val engine: EditorEngine,
 ) : BaseInputConnection(view, /* fullEditor = */ false) {
 
-    override fun beginBatchEdit(): Boolean { engine.beginBatch(); return true }
+    override fun beginBatchEdit(): Boolean {
+        engine.beginBatch(); return true
+    }
+
     override fun endBatchEdit(): Boolean = engine.endBatch()
 
     override fun setComposingText(text: CharSequence, newCursorPosition: Int): Boolean {
         engine.setComposingText(text.toString(), newCursorPosition); return true
     }
+
     override fun setComposingRegion(start: Int, end: Int): Boolean {
         engine.setComposingRegion(start, end); return true
     }
-    override fun finishComposingText(): Boolean { engine.finishComposing(); return true }
+
+    override fun finishComposingText(): Boolean {
+        engine.finishComposing(); return true
+    }
+
     override fun commitText(text: CharSequence, newCursorPosition: Int): Boolean {
         engine.commitText(text.toString(), newCursorPosition); return true
     }
+
     override fun deleteSurroundingText(beforeLength: Int, afterLength: Int): Boolean {
         engine.deleteSurroundingText(beforeLength, afterLength); return true
     }
+
     override fun deleteSurroundingTextInCodePoints(beforeLength: Int, afterLength: Int): Boolean {
         engine.deleteSurroundingTextInCodePoints(beforeLength, afterLength); return true
     }
+
     override fun getTextBeforeCursor(n: Int, flags: Int): CharSequence = engine.textBeforeCursor(n)
     override fun getTextAfterCursor(n: Int, flags: Int): CharSequence = engine.textAfterCursor(n)
     override fun getSelectedText(flags: Int): CharSequence? = engine.selectedText()
@@ -69,12 +80,23 @@ internal class EditorInputConnection(
     override fun sendKeyEvent(event: KeyEvent): Boolean {
         if (event.action == KeyEvent.ACTION_DOWN) {
             when (event.keyCode) {
-                KeyEvent.KEYCODE_DEL -> { engine.backspace(); return true }
-                KeyEvent.KEYCODE_FORWARD_DEL -> { engine.deleteForward(); return true }
-                KeyEvent.KEYCODE_ENTER -> { engine.insert("\n"); return true }
+                KeyEvent.KEYCODE_DEL -> {
+                    engine.backspace(); return true
+                }
+
+                KeyEvent.KEYCODE_FORWARD_DEL -> {
+                    engine.deleteForward(); return true
+                }
+
+                KeyEvent.KEYCODE_ENTER -> {
+                    engine.insert("\n"); return true
+                }
+
                 else -> {
                     val ch = event.unicodeChar
-                    if (ch != 0) { engine.insert(String(Character.toChars(ch))); return true }
+                    if (ch != 0) {
+                        engine.insert(String(Character.toChars(ch))); return true
+                    }
                 }
             }
         }
@@ -88,8 +110,13 @@ actual fun Modifier.editorTextInput(engine: EditorEngine, enabled: Boolean): Mod
 private data class EditorTextInputElement(val engine: EditorEngine) :
     ModifierNodeElement<EditorTextInputNode>() {
     override fun create(): EditorTextInputNode = EditorTextInputNode(engine)
-    override fun update(node: EditorTextInputNode) { node.engine = engine }
-    override fun InspectorInfo.inspectableProperties() { name = "editorTextInput" }
+    override fun update(node: EditorTextInputNode) {
+        node.engine = engine
+    }
+
+    override fun InspectorInfo.inspectableProperties() {
+        name = "editorTextInput"
+    }
 }
 
 private class EditorTextInputNode(var engine: EditorEngine) :

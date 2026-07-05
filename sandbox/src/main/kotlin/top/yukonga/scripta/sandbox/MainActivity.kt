@@ -36,8 +36,14 @@ class MainActivity : ComponentActivity() {
             var readOnly by remember { mutableStateOf(false) }
             // imePadding：软键盘弹出时把内容区上移到键盘之上，编辑器可用高度随之缩小，光标随动才能
             // 把光标停在键盘上方（否则 edge-to-edge 下全屏高度不变，下半屏点击/打字会被键盘遮住）。
-            Column(Modifier.fillMaxSize().systemBarsPadding().imePadding()) {
-                Row(Modifier.fillMaxWidth().background(Color(0xFF2D2D30)).padding(8.dp)) {
+            Column(Modifier
+                .fillMaxSize()
+                .systemBarsPadding()
+                .imePadding()) {
+                Row(Modifier
+                    .fillMaxWidth()
+                    .background(Color(0xFF2D2D30))
+                    .padding(8.dp)) {
                     BasicText(
                         text = "  加载 3MB YAML  ",
                         style = TextStyle(color = Color(0xFFE0E0E0), fontSize = 13.sp),
@@ -60,7 +66,9 @@ class MainActivity : ComponentActivity() {
                     language = EditorLanguage.Yaml,
                     softWrap = wrap,
                     readOnly = readOnly,
-                    modifier = Modifier.fillMaxWidth().weight(1f),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
                 )
             }
         }
