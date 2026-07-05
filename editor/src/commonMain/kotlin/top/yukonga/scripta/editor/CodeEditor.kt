@@ -39,14 +39,16 @@ import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
 import top.yukonga.scripta.editor.input.editorTextInput
 import top.yukonga.scripta.editor.render.EditorCanvas
 import top.yukonga.scripta.editor.render.EditorGeometry
+import top.yukonga.scripta.editor.render.VisualRowIndex
 import top.yukonga.scripta.editor.text.TextPosition
-import top.yukonga.scripta.editor.viewport.Viewport
+import kotlin.time.Duration.Companion.milliseconds
 
 /**
  * 虚拟化代码编辑器入口。自绘 + 视口虚拟化 + 自管 IME（Android），不使用 BasicTextField。
@@ -59,6 +61,7 @@ fun CodeEditor(
     language: EditorLanguage = EditorLanguage.PlainText,
     colors: EditorColors = EditorColors.Default,
     readOnly: Boolean = false,
+    softWrap: Boolean = false,
 ) {
     val engine = controller.engine
     LaunchedEffect(initialText) { controller.setText(initialText) }
@@ -88,24 +91,53 @@ fun CodeEditor(
     var viewportWidth by remember { mutableStateOf(0f) }
     var viewportHeight by remember { mutableStateOf(0f) }
 
-    // 顶层已读 engine.buffer.version 订阅重组；编辑后按行内容比对失效缓存。
-    val layoutCache = remember(version) { HashMap<Int, Pair<String, TextLayoutResult>>() }
+    // 换行模式下正文可用宽度（测量宽度约束）。
+    val textAreaWidthPx = (viewportWidth - gutterWidthPx - padXPx * 2).coerceAtLeast(1f)
+    val widthBucket = if (softWrap) textAreaWidthPx.toInt() else 0
+
+    // 视觉行索引：仅换行模式使用；行数/宽度/模式变化即重建（未测量的行按 1 行估算）。
+    val rowIndex = remember(softWrap, widthBucket, lineCount) { VisualRowIndex(lineCount) }
+
+    // 逐行 layout 缓存（内容/宽度/模式变化即失效）。换行时带宽度约束测量并回填视觉行数。
+    val layoutCache = remember(version, softWrap, widthBucket) { HashMap<Int, Pair<String, TextLayoutResult>>() }
     fun layoutFor(line: Int): TextLayoutResult? {
         if (line < 0 || line >= engine.buffer.lineCount) return null
         val content = engine.buffer.lineText(line)
         layoutCache[line]?.let { if (it.first == content) return it.second }
-        val measured = measurer.measure(content, textStyle)
+        val measured = if (softWrap) {
+            measurer.measure(content, textStyle, softWrap = true, constraints = Constraints(maxWidth = textAreaWidthPx.toInt().coerceAtLeast(1)))
+        } else {
+            measurer.measure(content, textStyle, softWrap = false)
+        }
         layoutCache[line] = content to measured
+        if (softWrap) rowIndex.setRows(line, measured.lineCount)
         return measured
     }
 
-    val contentHeight = lineCount * lineHeightPx
+    // 行 -> 顶部像素 / 像素 -> 行（换行走视觉行索引，不换行走平凡公式，行为不变）。
+    fun lineTopPx(line: Int): Float = if (softWrap) rowIndex.rowsBefore(line) * lineHeightPx else line * lineHeightPx
+    fun rowsOf(line: Int): Int = if (softWrap) rowIndex.rows(line) else 1
+    fun lineAtPx(y: Float): Int {
+        val row = (y / lineHeightPx).toInt().coerceAtLeast(0)
+        return if (softWrap) rowIndex.lineAtRow(row) else row.coerceIn(0, (lineCount - 1).coerceAtLeast(0))
+    }
+
+    // 预测量可见窗口（组合阶段填充缓存 + 行索引），并求不换行下最宽行以定横向滚动范围。
+    val estFirst = (lineAtPx(scrollY) - 3).coerceAtLeast(0)
+    val approxRows = (viewportHeight / lineHeightPx).toInt() + 8
+    val measureEnd = (estFirst + approxRows).coerceAtMost((lineCount - 1).coerceAtLeast(0))
+    var maxLineWidth = 0f
+    for (ln in estFirst..measureEnd) {
+        val l = layoutFor(ln)
+        if (!softWrap) maxLineWidth = maxOf(maxLineWidth, l?.size?.width?.toFloat() ?: 0f)
+    }
+
+    val contentHeight = (if (softWrap) rowIndex.totalRows() else lineCount) * lineHeightPx
     val maxScrollY = (contentHeight - viewportHeight).coerceAtLeast(0f)
     val clampedScrollY = scrollY.coerceIn(0f, maxScrollY)
-    val visible = Viewport.visibleLines(clampedScrollY, viewportHeight, lineHeightPx, lineCount)
-    val maxLineWidth = visible.maxOfOrNull { layoutFor(it)?.size?.width?.toFloat() ?: 0f } ?: 0f
-    val maxScrollX = (gutterWidthPx + padXPx * 2 + maxLineWidth - viewportWidth).coerceAtLeast(0f)
+    val maxScrollX = if (softWrap) 0f else (gutterWidthPx + padXPx * 2 + maxLineWidth - viewportWidth).coerceAtLeast(0f)
     val clampedScrollX = scrollX.coerceIn(0f, maxScrollX)
+    val firstVisibleLine = (lineAtPx(clampedScrollY) - 3).coerceAtLeast(0)
 
     val vScroll = rememberScrollableState { delta ->
         val c = (scrollY - delta).coerceIn(0f, maxScrollY); val moved = scrollY - c; scrollY = c; moved
@@ -121,15 +153,16 @@ fun CodeEditor(
     var blink by remember { mutableStateOf(true) }
     LaunchedEffect(engine.selection, readOnly) {
         blink = true
-        if (!readOnly) while (true) { delay(500); blink = !blink }
+        if (!readOnly) while (true) { delay(500.milliseconds); blink = !blink }
     }
 
     LaunchedEffect(engine.selection, viewportHeight) {
         if (viewportHeight <= 0f) return@LaunchedEffect
         if (selectionDragPos != null) return@LaunchedEffect // 选区拖拽时由边缘自动滚动接管
-        val caretY = engine.selEnd.line * lineHeightPx
-        if (caretY < scrollY) scrollY = caretY
-        else if (caretY + lineHeightPx > scrollY + viewportHeight) scrollY = caretY + lineHeightPx - viewportHeight
+        val caretTop = lineTopPx(engine.selEnd.line)
+        val caretBottom = caretTop + rowsOf(engine.selEnd.line) * lineHeightPx
+        if (caretTop < scrollY) scrollY = caretTop
+        else if (caretBottom > scrollY + viewportHeight) scrollY = caretBottom - viewportHeight
     }
 
     // 手势闭包由 pointerInput(engine) 固定、不随滚动重启，会按值捕获几何量。用 rememberUpdatedState
@@ -139,10 +172,11 @@ fun CodeEditor(
     val hitGutterWidth = rememberUpdatedState(gutterWidthPx)
 
     fun positionAtWithScroll(offset: Offset, sY: Float, sX: Float): TextPosition {
-        val ln = EditorGeometry.lineAtY(offset.y, sY, lineHeightPx, engine.buffer.lineCount)
+        val ln = lineAtPx(offset.y + sY)
         val layout = layoutFor(ln)
         val localX = (offset.x - hitGutterWidth.value - padXPx + sX).coerceAtLeast(0f)
-        val col = layout?.getOffsetForPosition(Offset(localX, layout.size.height / 2f)) ?: 0
+        val localY = ((offset.y + sY) - lineTopPx(ln)).coerceAtLeast(0f)
+        val col = layout?.getOffsetForPosition(Offset(localX, localY)) ?: 0
         return TextPosition(ln, col.coerceAtMost(engine.buffer.lineLength(ln)))
     }
 
@@ -243,7 +277,8 @@ fun CodeEditor(
             padXPx = padXPx,
             scrollX = clampedScrollX,
             scrollY = clampedScrollY,
-            visibleRange = visible,
+            firstVisibleLine = firstVisibleLine,
+            lineTopPx = ::lineTopPx,
             caretVisible = !readOnly && blink,
             layoutFor = ::layoutFor,
             modifier = Modifier.fillMaxSize(),

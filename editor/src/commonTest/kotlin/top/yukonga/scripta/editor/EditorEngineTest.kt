@@ -7,9 +7,9 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class EditorEngineTest {
-    @Test fun initialCursorAtEnd() {
+    @Test fun initialCursorAtStart() {
         val e = EditorEngine("abc")
-        assertEquals(TextPosition(0, 3), e.selStart)
+        assertEquals(TextPosition(0, 0), e.selStart)
         assertTrue(e.selection.isEmpty)
     }
 
@@ -104,11 +104,11 @@ class EditorEngineTest {
         assertEquals("abc", e.getText())
     }
 
-    @Test fun setTextResetsCursorToEnd() {
+    @Test fun setTextResetsCursorToStart() {
         val e = EditorEngine("old")
         e.setText("brand\nnew")
         assertEquals("brand\nnew", e.getText())
-        assertEquals(TextPosition(1, 3), e.selStart)
+        assertEquals(TextPosition(0, 0), e.selStart)
     }
 
     // --- Task 5: IME composing + surrounding 删除 ---

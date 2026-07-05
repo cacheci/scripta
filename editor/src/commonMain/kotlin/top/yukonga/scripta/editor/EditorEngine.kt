@@ -38,7 +38,7 @@ class EditorEngine(initialText: String = "") {
     private var batchDepth = 0
 
     init {
-        if (initialText.isNotEmpty()) setText(initialText) else selection = TextRange.cursor(buffer.endPosition())
+        if (initialText.isNotEmpty()) setText(initialText)
     }
 
     // --- 批处理 / IME 通知 -------------------------------------------------------------------
@@ -74,7 +74,7 @@ class EditorEngine(initialText: String = "") {
     fun setText(text: String) {
         buffer.setText(text)
         index.invalidateFrom(0)
-        selection = TextRange.cursor(buffer.endPosition())
+        selection = TextRange.cursor(TextPosition(0, 0)) // 打开文件光标停在文首
         composing = null
         maybeNotify()
     }

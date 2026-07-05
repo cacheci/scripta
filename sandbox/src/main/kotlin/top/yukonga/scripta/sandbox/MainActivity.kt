@@ -31,6 +31,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             val controller = rememberCodeEditorController()
             var text by remember { mutableStateOf(SAMPLE_YAML) }
+            var wrap by remember { mutableStateOf(false) }
             Column(Modifier.fillMaxSize().systemBarsPadding()) {
                 Row(Modifier.fillMaxWidth().background(Color(0xFF2D2D30)).padding(8.dp)) {
                     BasicText(
@@ -38,11 +39,17 @@ class MainActivity : ComponentActivity() {
                         style = TextStyle(color = Color(0xFFE0E0E0), fontSize = 13.sp),
                         modifier = Modifier.clickable { text = bigYaml(60_000) },
                     )
+                    BasicText(
+                        text = if (wrap) "  换行: 开  " else "  换行: 关  ",
+                        style = TextStyle(color = Color(0xFF6FCF97), fontSize = 13.sp),
+                        modifier = Modifier.clickable { wrap = !wrap },
+                    )
                 }
                 CodeEditor(
                     controller = controller,
                     initialText = text,
                     language = EditorLanguage.Yaml,
+                    softWrap = wrap,
                     modifier = Modifier.fillMaxWidth().weight(1f),
                 )
             }
@@ -65,4 +72,5 @@ private val SAMPLE_YAML = """
       virtualized: true
       language: yaml
       中文: 输入测试(拼音 composing)
+      long_line: 这是一行非常非常非常长的文本用来测试自动换行 aaaaaaaa bbbbbbbb cccccccc dddddddd eeeeeeee ffffffff gggggggg hhhhhhhh iiiiiiii
 """.trimIndent()
