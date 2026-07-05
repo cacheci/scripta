@@ -3,6 +3,9 @@ package top.yukonga.scripta.editor
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.rememberScrollableState
@@ -72,9 +75,12 @@ fun CodeEditor(
     val interaction = remember { MutableInteractionSource() }
     val clipboard = LocalClipboardManager.current
 
-    val textStyle = remember(colors) { TextStyle(color = colors.foreground, fontFamily = FontFamily.Monospace, fontSize = 14.sp, lineHeight = 20.sp) }
-    val numberStyle = remember(colors) { TextStyle(color = colors.gutterForeground, fontFamily = FontFamily.Monospace, fontSize = 13.sp, lineHeight = 20.sp) }
-    val lineHeightPx = with(density) { 20.sp.toPx() }
+    // 双指缩放调整的字号（sp）。行高、gutter、layout 随之联动重算。
+    var fontSizeSp by remember { mutableStateOf(14f) }
+    val lineHeightSp = fontSizeSp * 1.4f
+    val textStyle = remember(colors, fontSizeSp) { TextStyle(color = colors.foreground, fontFamily = FontFamily.Monospace, fontSize = fontSizeSp.sp, lineHeight = lineHeightSp.sp) }
+    val numberStyle = remember(colors, fontSizeSp) { TextStyle(color = colors.gutterForeground, fontFamily = FontFamily.Monospace, fontSize = (fontSizeSp - 1f).coerceAtLeast(6f).sp, lineHeight = lineHeightSp.sp) }
+    val lineHeightPx = with(density) { lineHeightSp.sp.toPx() }
     val padXPx = with(density) { 8.dp.toPx() }
 
     // 订阅编辑版本，驱动重组（layoutFor 内按行内容失效缓存）
@@ -95,11 +101,11 @@ fun CodeEditor(
     val textAreaWidthPx = (viewportWidth - gutterWidthPx - padXPx * 2).coerceAtLeast(1f)
     val widthBucket = if (softWrap) textAreaWidthPx.toInt() else 0
 
-    // 视觉行索引：仅换行模式使用；行数/宽度/模式变化即重建（未测量的行按 1 行估算）。
-    val rowIndex = remember(softWrap, widthBucket, lineCount) { VisualRowIndex(lineCount) }
+    // 视觉行索引：仅换行模式使用；行数/宽度/模式/字号变化即重建（未测量的行按 1 行估算）。
+    val rowIndex = remember(softWrap, widthBucket, lineCount, fontSizeSp) { VisualRowIndex(lineCount) }
 
-    // 逐行 layout 缓存（内容/宽度/模式变化即失效）。换行时带宽度约束测量并回填视觉行数。
-    val layoutCache = remember(version, softWrap, widthBucket) { HashMap<Int, Pair<String, TextLayoutResult>>() }
+    // 逐行 layout 缓存（内容/宽度/模式/字号变化即失效）。换行时带宽度约束测量并回填视觉行数。
+    val layoutCache = remember(version, softWrap, widthBucket, fontSizeSp) { HashMap<Int, Pair<String, TextLayoutResult>>() }
     fun layoutFor(line: Int): TextLayoutResult? {
         if (line < 0 || line >= engine.buffer.lineCount) return null
         val content = engine.buffer.lineText(line)
@@ -207,6 +213,27 @@ fun CodeEditor(
             .onSizeChanged { viewportWidth = it.width.toFloat(); viewportHeight = it.height.toFloat() }
             .scrollable(vScroll, Orientation.Vertical)
             .scrollable(hScroll, Orientation.Horizontal)
+            .pointerInput(Unit) {
+                // 双指缩放调字号：仅在 ≥2 指时消费，单指留给滚动/选择。等比缩放滚动位置以稳住视觉位置。
+                awaitEachGesture {
+                    awaitFirstDown(requireUnconsumed = false)
+                    do {
+                        val event = awaitPointerEvent()
+                        if (event.changes.count { it.pressed } >= 2) {
+                            val zoom = event.calculateZoom()
+                            if (zoom != 1f) {
+                                val old = fontSizeSp
+                                val next = (old * zoom).coerceIn(8f, 40f)
+                                if (next != old) {
+                                    fontSizeSp = next
+                                    scrollY *= next / old
+                                }
+                                event.changes.forEach { it.consume() }
+                            }
+                        }
+                    } while (event.changes.any { it.pressed })
+                }
+            }
             .editorTextInput(engine, enabled = !readOnly)
             .onKeyEvent { ev ->
                 if (ev.type != KeyEventType.KeyDown) return@onKeyEvent false
