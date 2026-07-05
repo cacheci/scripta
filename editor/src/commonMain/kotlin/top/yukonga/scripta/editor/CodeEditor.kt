@@ -342,7 +342,7 @@ fun CodeEditor(
             firstVisibleLine = firstVisibleLine,
             lineTopPx = ::lineTopPx,
             refBaselinePx = refBaselinePx,
-            caretVisible = !readOnly && blink,
+            caretVisible = { !readOnly && blink },
             layoutFor = ::layoutFor,
             modifier = Modifier.fillMaxSize(),
         )

@@ -35,7 +35,7 @@ fun EditorCanvas(
     firstVisibleLine: Int,
     lineTopPx: (Int) -> Float,
     refBaselinePx: Float,
-    caretVisible: Boolean,
+    caretVisible: () -> Boolean,
     layoutFor: (Int) -> TextLayoutResult?,
     modifier: Modifier = Modifier,
 ) {
@@ -106,8 +106,9 @@ fun EditorCanvas(
             }
         }
 
-        // 光标（无选择、闪烁可见时）
-        if (sel.isEmpty && caretVisible) {
+        // 光标（无选择、闪烁可见时）。caretVisible 在 draw 里读取 blink，使闪烁只触发本画布重绘、
+        // 不再让 CodeEditor 与本可组合每 500ms 整体重组。
+        if (sel.isEmpty && caretVisible()) {
             val layout = layoutFor(sel.start.line)
             if (layout != null) {
                 val textTop = lineTopPx(sel.start.line) - scrollY + (refBaselinePx - layout.firstBaseline)
