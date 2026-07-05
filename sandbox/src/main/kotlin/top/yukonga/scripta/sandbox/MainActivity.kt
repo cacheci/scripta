@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.text.BasicText
@@ -33,7 +34,9 @@ class MainActivity : ComponentActivity() {
             var text by remember { mutableStateOf(SAMPLE_YAML) }
             var wrap by remember { mutableStateOf(false) }
             var readOnly by remember { mutableStateOf(false) }
-            Column(Modifier.fillMaxSize().systemBarsPadding()) {
+            // imePadding：软键盘弹出时把内容区上移到键盘之上，编辑器可用高度随之缩小，光标随动才能
+            // 把光标停在键盘上方（否则 edge-to-edge 下全屏高度不变，下半屏点击/打字会被键盘遮住）。
+            Column(Modifier.fillMaxSize().systemBarsPadding().imePadding()) {
                 Row(Modifier.fillMaxWidth().background(Color(0xFF2D2D30)).padding(8.dp)) {
                     BasicText(
                         text = "  加载 3MB YAML  ",

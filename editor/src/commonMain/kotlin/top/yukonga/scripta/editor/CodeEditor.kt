@@ -57,6 +57,9 @@ import kotlin.time.Duration.Companion.milliseconds
 
 /**
  * 虚拟化代码编辑器入口。自绘 + 视口虚拟化 + 自管 IME（Android），不使用 BasicTextField。
+ *
+ * 宿主须为编辑器容器消费 IME insets（如 `Modifier.imePadding()`），使可用视口高度反映键盘弹出后的
+ * 可见高度——否则光标随动会把光标滚到键盘下面。
  */
 @Composable
 fun CodeEditor(
