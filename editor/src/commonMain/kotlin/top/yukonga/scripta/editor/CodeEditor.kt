@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -150,22 +151,23 @@ fun CodeEditor(
         return if (softWrap) rowIndex.lineAtRow(row) else row.coerceIn(0, (lineCount - 1).coerceAtLeast(0))
     }
 
+    // 量化滚动：组合只订阅「首个可见行」，跨行才重组；同一行内的滚动仅由 EditorCanvas 在 draw 阶段读
+    // 像素级 scrollY/scrollX 平滑重绘，不再每滚 1px 全量重组。derivedStateOf 仅在整数结果变化时通知读者。
+    val scrollLine by remember(rowIndex, lineHeightPx, softWrap) { derivedStateOf { lineAtPx(scrollY) } }
+
     // 预测量可见窗口（组合阶段填充缓存 + 行索引），并求不换行下最宽行以定横向滚动范围。
-    val estFirst = (lineAtPx(scrollY) - 3).coerceAtLeast(0)
+    val firstVisibleLine = (scrollLine - 3).coerceAtLeast(0)
     val approxRows = (viewportHeight / lineHeightPx).toInt() + 8
-    val measureEnd = (estFirst + approxRows).coerceAtMost((lineCount - 1).coerceAtLeast(0))
+    val measureEnd = (firstVisibleLine + approxRows).coerceAtMost((lineCount - 1).coerceAtLeast(0))
     var maxLineWidth = 0f
-    for (ln in estFirst..measureEnd) {
+    for (ln in firstVisibleLine..measureEnd) {
         val l = layoutFor(ln)
         if (!softWrap) maxLineWidth = maxOf(maxLineWidth, l?.size?.width?.toFloat() ?: 0f)
     }
 
     val contentHeight = (if (softWrap) rowIndex.totalRows() else lineCount) * lineHeightPx
     val maxScrollY = (contentHeight - viewportHeight).coerceAtLeast(0f)
-    val clampedScrollY = scrollY.coerceIn(0f, maxScrollY)
     val maxScrollX = if (softWrap) 0f else (gutterWidthPx + padXPx * 2 + maxLineWidth - viewportWidth).coerceAtLeast(0f)
-    val clampedScrollX = scrollX.coerceIn(0f, maxScrollX)
-    val firstVisibleLine = (lineAtPx(clampedScrollY) - 3).coerceAtLeast(0)
 
     val vScroll = rememberScrollableState { delta ->
         val c = (scrollY - delta).coerceIn(0f, maxScrollY); val moved = scrollY - c; scrollY = c; moved
@@ -193,10 +195,9 @@ fun CodeEditor(
         else if (caretBottom > scrollY + viewportHeight) scrollY = caretBottom - viewportHeight
     }
 
-    // 手势闭包由 pointerInput(engine) 固定、不随滚动重启，会按值捕获几何量。用 rememberUpdatedState
-    // 让命中测试读到「当前帧」的滚动与 gutter 宽度，否则滚动后点击会命中错误行、并触发自动滚动跳变。
-    val hitScrollY = rememberUpdatedState(clampedScrollY)
-    val hitScrollX = rememberUpdatedState(clampedScrollX)
+    // 手势闭包由 pointerInput(engine) 固定、不随滚动重启，会按值捕获几何量。gutter 宽用 rememberUpdatedState
+    // 提到当前帧；滚动量则在 positionAt 里直接读活的 scrollY/scrollX——既让命中测试始终对齐当前滚动，
+    // 又不因组合阶段读取滚动量而每滚 1px 重组。
     val hitGutterWidth = rememberUpdatedState(gutterWidthPx)
 
     fun positionAtWithScroll(offset: Offset, sY: Float, sX: Float): TextPosition {
@@ -210,7 +211,8 @@ fun CodeEditor(
         return TextPosition(ln, col.coerceAtMost(engine.buffer.lineLength(ln)))
     }
 
-    fun positionAt(offset: Offset): TextPosition = positionAtWithScroll(offset, hitScrollY.value, hitScrollX.value)
+    fun positionAt(offset: Offset): TextPosition =
+        positionAtWithScroll(offset, scrollY.coerceIn(0f, maxScrollY), scrollX.coerceIn(0f, maxScrollX))
 
     // 手势闭包由 pointerInput(engine) 固定，不随字号/换行/行高变化重启。用 rememberUpdatedState 让它
     // 始终调「当前帧」的 positionAt（内含最新的 lineHeightPx / 视觉行索引 / softWrap / layout）。
@@ -348,9 +350,9 @@ fun CodeEditor(
             lineHeightPx = lineHeightPx,
             gutterWidthPx = gutterWidthPx,
             padXPx = padXPx,
-            scrollX = clampedScrollX,
-            scrollY = clampedScrollY,
-            firstVisibleLine = firstVisibleLine,
+            scrollX = { scrollX.coerceIn(0f, maxScrollX) },
+            scrollY = { scrollY.coerceIn(0f, maxScrollY) },
+            firstVisibleLine = { (lineAtPx(scrollY) - 3).coerceAtLeast(0) },
             lineTopPx = ::lineTopPx,
             refBaselinePx = refBaselinePx,
             caretVisible = { !readOnly && blink },

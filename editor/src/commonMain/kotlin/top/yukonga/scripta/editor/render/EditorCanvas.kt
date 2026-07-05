@@ -30,9 +30,9 @@ fun EditorCanvas(
     lineHeightPx: Float,
     gutterWidthPx: Float,
     padXPx: Float,
-    scrollX: Float,
-    scrollY: Float,
-    firstVisibleLine: Int,
+    scrollX: () -> Float,
+    scrollY: () -> Float,
+    firstVisibleLine: () -> Int,
     lineTopPx: (Int) -> Float,
     refBaselinePx: Float,
     caretVisible: () -> Boolean,
@@ -44,17 +44,20 @@ fun EditorCanvas(
     // 防止长时间滚动大文件时无界增长。缓存的是与逐帧重测完全相同的 layout，输出不变、仅省掉重复布局。
     val numberLayoutCache = remember(numberStyle) { HashMap<Int, TextLayoutResult>() }
     Canvas(modifier) {
+        // 在 draw 阶段读取滚动量：滚动只触发本画布重绘，不再让上层每滚 1px 重组。
+        val sX = scrollX()
+        val sY = scrollY()
         drawRect(colors.background, topLeft = Offset.Zero, size = size)
         drawRect(colors.gutterBackground, topLeft = Offset.Zero, size = Size(gutterWidthPx, size.height))
 
         val sel = engine.selection
         val comp = engine.composing
-        val textX = gutterWidthPx + padXPx - scrollX
+        val textX = gutterWidthPx + padXPx - sX
         val lineCount = engine.buffer.lineCount
 
-        var line = firstVisibleLine.coerceIn(0, (lineCount - 1).coerceAtLeast(0))
+        var line = firstVisibleLine().coerceIn(0, (lineCount - 1).coerceAtLeast(0))
         while (line < lineCount) {
-            val top = lineTopPx(line) - scrollY
+            val top = lineTopPx(line) - sY
             if (top >= size.height) break
             val layout = layoutFor(line)
             if (layout == null) { line++; continue }
@@ -95,7 +98,7 @@ fun EditorCanvas(
         comp?.let { c ->
             val layout = layoutFor(c.start.line)
             if (layout != null) {
-                val textTop = lineTopPx(c.start.line) - scrollY + (refBaselinePx - layout.firstBaseline)
+                val textTop = lineTopPx(c.start.line) - sY + (refBaselinePx - layout.firstBaseline)
                 val len = engine.buffer.lineLength(c.start.line)
                 val startRect = layout.getCursorRect(c.start.column.coerceIn(0, len))
                 val endRect = layout.getCursorRect(c.end.column.coerceIn(0, len))
@@ -111,7 +114,7 @@ fun EditorCanvas(
         if (sel.isEmpty && caretVisible()) {
             val layout = layoutFor(sel.start.line)
             if (layout != null) {
-                val textTop = lineTopPx(sel.start.line) - scrollY + (refBaselinePx - layout.firstBaseline)
+                val textTop = lineTopPx(sel.start.line) - sY + (refBaselinePx - layout.firstBaseline)
                 val cr = layout.getCursorRect(sel.start.column.coerceIn(0, engine.buffer.lineLength(sel.start.line)))
                 drawLine(colors.cursor, Offset(textX + cr.left, textTop + cr.top + 1f), Offset(textX + cr.left, textTop + cr.bottom - 1f), strokeWidth = 2.5f)
             }
