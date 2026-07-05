@@ -31,7 +31,4 @@ kotlin {
 dependencies {
     implementation(projects.editor)
     implementation(libs.androidx.activity.compose)
-
-    // Spike: pure-logic unit tests for the editor model (runs on the JVM, no device).
-    testImplementation("junit:junit:4.13.2")
 }
