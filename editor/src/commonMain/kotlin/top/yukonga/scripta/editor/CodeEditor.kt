@@ -244,13 +244,25 @@ fun CodeEditor(
         caretHandleVisible = false
     }
 
-    LaunchedEffect(engine.selection, viewportHeight) {
+    LaunchedEffect(engine.selection, viewportHeight, viewportWidth) {
         if (viewportHeight <= 0f) return@LaunchedEffect
         if (selectionDragPos != null) return@LaunchedEffect // 选区拖拽时由边缘自动滚动接管
-        val caretTop = lineTopPx(engine.selEnd.line)
-        val caretBottom = caretTop + rowsOf(engine.selEnd.line) * lineHeightPx
+        val line = engine.selEnd.line
+        val caretTop = lineTopPx(line)
+        val caretBottom = caretTop + rowsOf(line) * lineHeightPx
         if (caretTop < scrollY) scrollY = caretTop
         else if (caretBottom > scrollY + viewportHeight) scrollY = caretBottom - viewportHeight
+        // 横向随动：不换行时若光标越过左/右缘，滚动露出光标并留一小段余量（换行下 maxScrollX=0，跳过）。
+        if (!softWrap && viewportWidth > 0f) {
+            val layout = layoutFor(line)
+            if (layout != null) {
+                val caretX = layout.getCursorRect(engine.selEnd.column.coerceAtMost(engine.buffer.lineLength(line))).left
+                val textAreaW = (viewportWidth - gutterWidthPx - padXPx * 2).coerceAtLeast(1f)
+                val margin = padXPx * 3
+                if (caretX < scrollX + margin) scrollX = (caretX - margin).coerceIn(0f, maxScrollX)
+                else if (caretX > scrollX + textAreaW - margin) scrollX = (caretX - textAreaW + margin).coerceIn(0f, maxScrollX)
+            }
+        }
     }
 
     // 手势闭包由 pointerInput(engine) 固定、不随滚动重启，会按值捕获几何量。gutter 宽用 rememberUpdatedState
