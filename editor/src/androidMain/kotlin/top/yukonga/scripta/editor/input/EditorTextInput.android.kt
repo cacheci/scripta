@@ -143,9 +143,13 @@ private class EditorTextInputNode(var engine: EditorEngine) :
             }
             engine.requestShowKeyboard = { imm?.showSoftInput(v, 0) }
             val request = PlatformTextInputMethodRequest { outAttrs ->
-                outAttrs.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
+                // NO_SUGGESTIONS：代码/YAML 不要候选条与拼写波浪线，避免输入法把 fooBar、i++ 等联想改坏。
+                outAttrs.inputType =
+                    InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+                // NO_PERSONALIZED_LEARNING（API 26+，旧版忽略）：别把代码喂进输入法个人词库。
                 outAttrs.imeOptions =
-                    EditorInfo.IME_ACTION_NONE or EditorInfo.IME_FLAG_NO_FULLSCREEN or EditorInfo.IME_FLAG_NO_EXTRACT_UI
+                    EditorInfo.IME_ACTION_NONE or EditorInfo.IME_FLAG_NO_FULLSCREEN or
+                        EditorInfo.IME_FLAG_NO_EXTRACT_UI or EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING
                 val (s, e) = engine.selectionOffsets()
                 outAttrs.initialSelStart = s
                 outAttrs.initialSelEnd = e
