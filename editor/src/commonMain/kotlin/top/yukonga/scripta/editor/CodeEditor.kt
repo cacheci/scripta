@@ -259,7 +259,8 @@ fun CodeEditor(
         if (caretTop < scrollY) scrollY = caretTop
         else if (caretBottom > scrollY + viewportHeight) scrollY = caretBottom - viewportHeight
         // 横向随动：不换行时若光标越过左/右缘，滚动露出光标并留一小段余量（换行下 maxScrollX=0，跳过）。
-        if (!softWrap && viewportWidth > 0f) {
+        // 纯纵向导航（目标列生效）时跳过——否则目标列在短/长行间夹变会让视口横向来回 snap，很突兀。
+        if (!softWrap && viewportWidth > 0f && !engine.hasGoalColumn) {
             val layout = layoutFor(line)
             if (layout != null) {
                 val caretX = layout.getCursorRect(engine.selEnd.column.coerceAtMost(engine.buffer.lineLength(line))).left

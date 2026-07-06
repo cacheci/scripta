@@ -32,6 +32,10 @@ class EditorEngine(initialText: String = "") {
     val selStart: TextPosition get() = selection.start
     val selEnd: TextPosition get() = selection.end
 
+    /** 是否处于「上下移动记忆目标列」状态。视图层据此在纯纵向导航时不做横向随动——目标列夹变会让横向随动
+     *  把视口来回 snap，而此时横向意图本就固定在目标列、视口应保持稳定。横向移动/编辑/点按会清空目标列。 */
+    val hasGoalColumn: Boolean get() = desiredColumn != null
+
     interface ImeListener {
         fun onSelectionChanged(selStart: Int, selEnd: Int, composingStart: Int, composingEnd: Int)
     }
