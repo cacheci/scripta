@@ -8,6 +8,7 @@ import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.calculateCentroid
 import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.gestures.drag
 import androidx.compose.foundation.gestures.rememberScrollableState
 import androidx.compose.foundation.gestures.scrollable
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
@@ -56,6 +57,7 @@ import top.yukonga.scripta.editor.input.plainText
 import top.yukonga.scripta.editor.input.plainTextClipEntry
 import top.yukonga.scripta.editor.render.EditorCanvas
 import top.yukonga.scripta.editor.render.EditorGeometry
+import top.yukonga.scripta.editor.render.HandleKind
 import top.yukonga.scripta.editor.render.VisualRowIndex
 import top.yukonga.scripta.editor.text.TextPosition
 import kotlin.time.Duration.Companion.milliseconds
@@ -119,6 +121,9 @@ fun CodeEditor(
     }
     val lineHeightPx = with(density) { lineHeightSp.sp.toPx() }
     val padXPx = with(density) { 8.dp.toPx() }
+    // 拖动手柄半径与命中外扩（细光标线太小，靠 slop 放大可抓区域）。
+    val handleRadiusPx = with(density) { 8.dp.toPx() }
+    val handleSlopPx = with(density) { 10.dp.toPx() }
     // 统一基线：以拉丁参考行的 firstBaseline 为目标，各行绘制时按差值平移，抵消 CJK/拉丁字体度量差
     // 导致的整行基线偏移（含中文的行里英文向下偏移）。
     val refBaselinePx = remember(textStyle) { measurer.measure("Ag", textStyle).firstBaseline }
@@ -223,6 +228,22 @@ fun CodeEditor(
         }
     }
 
+    // 光标泪滴手柄：点按落光标 / 拖动后短暂显示，约 4s 无操作自动隐藏；打字（buffer.version 变化）立即收起。
+    // 选区两端手柄不走这里——它们随选区常驻，由画布按 !selection.isEmpty 直接判定。
+    var caretHandleVisible by remember { mutableStateOf(false) }
+    var caretHandleToken by remember { mutableStateOf(0) }
+    fun pingCaretHandle() {
+        caretHandleVisible = true; caretHandleToken++
+    }
+    LaunchedEffect(caretHandleToken) {
+        if (caretHandleToken == 0) return@LaunchedEffect
+        delay(4000.milliseconds); caretHandleVisible = false
+    }
+    LaunchedEffect(engine.buffer.version) {
+        // 任何编辑都收起光标手柄；首帧亦触发，但此时本就不可见、无副作用。
+        caretHandleVisible = false
+    }
+
     LaunchedEffect(engine.selection, viewportHeight) {
         if (viewportHeight <= 0f) return@LaunchedEffect
         if (selectionDragPos != null) return@LaunchedEffect // 选区拖拽时由边缘自动滚动接管
@@ -257,6 +278,19 @@ fun CodeEditor(
 
     // 只读态提升为「当前帧」值，供固定 key 的手势闭包读取，避免 readOnly 切换后闭包按旧值捕获。
     val readOnlyLive = rememberUpdatedState(readOnly)
+
+    // 光标/端点在屏幕上的矩形 [left, top, bottom]，供手柄命中测试。读活的 scroll/layout；用 rememberUpdatedState
+    // 让固定 key 的手势闭包取到当前帧几何（与 positionAtLive 同理）。与画布 drawHandle 的坐标算法一致。
+    fun caretScreenColumnRect(pos: TextPosition): FloatArray? {
+        val layout = layoutFor(pos.line) ?: return null
+        val col = pos.column.coerceIn(0, engine.buffer.lineLength(pos.line))
+        val cr = layout.getCursorRect(col)
+        val sY = scrollY.coerceIn(0f, maxScrollY)
+        val sX = scrollX.coerceIn(0f, maxScrollX)
+        val base = lineTopPx(pos.line) - sY + (refBaselinePx - layout.firstBaseline)
+        return floatArrayOf(gutterWidthPx + padXPx - sX + cr.left, base + cr.top, base + cr.bottom)
+    }
+    val caretRectLive = rememberUpdatedState<(TextPosition) -> FloatArray?> { caretScreenColumnRect(it) }
 
     // 边缘自动滚动 effect 的 key 是 Boolean、不随重组刷新，循环体会按值捕获滚动上限。软换行下自动滚动
     // 驶入未测量区域时真实 maxScrollY 会随测量增大，用 rememberUpdatedState 让循环读到当前帧上限，
@@ -415,7 +449,10 @@ fun CodeEditor(
                     } ?: return@awaitEachGesture
                     engine.setCursor(positionAtLive.value(up.position))
                     focusRequester.requestFocus()
-                    if (!readOnlyLive.value) engine.requestShowKeyboard?.invoke()
+                    if (!readOnlyLive.value) {
+                        engine.requestShowKeyboard?.invoke()
+                        pingCaretHandle() // 落光标后显示泪滴手柄（4s 后自动隐藏）
+                    }
                     val second = withTimeoutOrNull(viewConfiguration.doubleTapTimeoutMillis) {
                         awaitFirstDown(requireUnconsumed = false)
                     }
@@ -448,6 +485,61 @@ fun CodeEditor(
                     onDragCancel = { selectionDragPos = null },
                 )
             }
+            // 手柄拖拽：抓到光标/选区端点手柄即接管——重定位光标或调整选区端点；未抓到则不消费，让位给
+            // 滚动/点按/长按。本块是最内层 pointerInput，Main 阶段最先处理，故能先于 scrollable 抢占手柄拖拽；
+            // 命中盒经 caretRectLive 取当前帧几何，避开 stale-capture 坑。
+            .pointerInput(engine) {
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    val p = down.position
+                    val sel = engine.selection
+                    fun hit(kind: HandleKind, at: TextPosition): Boolean {
+                        val r = caretRectLive.value(at) ?: return false
+                        return EditorGeometry.handleGeometry(kind, r[0], r[1], r[2], handleRadiusPx, handleSlopPx)
+                            .hitContains(p.x, p.y)
+                    }
+                    // 有选区时只看两端手柄（终点优先）；无选区且光标手柄可见、非只读时看光标手柄。
+                    var kind: HandleKind? = null
+                    var anchor: TextPosition? = null
+                    var grabbed: TextPosition? = null
+                    if (!sel.isEmpty) {
+                        when {
+                            hit(HandleKind.SelectionEnd, sel.end) -> {
+                                kind = HandleKind.SelectionEnd; anchor = sel.start; grabbed = sel.end
+                            }
+
+                            hit(HandleKind.SelectionStart, sel.start) -> {
+                                kind = HandleKind.SelectionStart; anchor = sel.end; grabbed = sel.start
+                            }
+                        }
+                    } else if (caretHandleVisible && !readOnlyLive.value && hit(HandleKind.Caret, sel.start)) {
+                        kind = HandleKind.Caret; grabbed = sel.start
+                    }
+                    if (kind == null) return@awaitEachGesture // 未抓到手柄，让位给滚动/点按/长按
+
+                    down.consume()
+                    // 纵向抓取偏移：目标点落在光标中部而非手指处（手指压在泪滴上、光标在其上方）。
+                    val gr = grabbed?.let { caretRectLive.value(it) }
+                    val grabDy = if (gr != null) (gr[1] + gr[2]) / 2f - p.y else 0f
+                    fun mapped(o: Offset): TextPosition = positionAtLive.value(Offset(o.x, o.y + grabDy))
+
+                    if (kind == HandleKind.Caret) {
+                        engine.setCursor(mapped(p)); pingCaretHandle()
+                        drag(down.id) { change -> engine.setCursor(mapped(change.position)); change.consume() }
+                        pingCaretHandle() // 抬手后重置 4s 计时
+                    } else {
+                        val a = anchor!!
+                        selectionAnchor = a
+                        selectionDragPos = p
+                        engine.setSelection(a, mapped(p))
+                        drag(down.id) { change ->
+                            selectionDragPos = change.position
+                            engine.setSelection(a, mapped(change.position)); change.consume()
+                        }
+                        selectionDragPos = null
+                    }
+                }
+            }
     ) {
         EditorCanvas(
             engine = engine,
@@ -464,6 +556,8 @@ fun CodeEditor(
             lineTopPx = ::lineTopPx,
             refBaselinePx = refBaselinePx,
             caretVisible = { !readOnly && blink },
+            caretHandleVisible = { caretHandleVisible && !readOnly },
+            handleRadiusPx = handleRadiusPx,
             layoutFor = ::layoutFor,
             modifier = Modifier.fillMaxSize(),
         )

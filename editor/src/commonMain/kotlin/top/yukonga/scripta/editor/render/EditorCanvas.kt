@@ -12,6 +12,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.drawText
 import top.yukonga.scripta.editor.EditorColors
 import top.yukonga.scripta.editor.EditorEngine
+import top.yukonga.scripta.editor.text.TextPosition
 
 /**
  * 只绘制可见行的画布。从 [firstVisibleLine] 向下按 [lineTopPx] 走，直到超出视口。行高取自各行 layout
@@ -36,6 +37,8 @@ fun EditorCanvas(
     lineTopPx: (Int) -> Float,
     refBaselinePx: Float,
     caretVisible: () -> Boolean,
+    caretHandleVisible: () -> Boolean,
+    handleRadiusPx: Float,
     layoutFor: (Int) -> TextLayoutResult?,
     modifier: Modifier = Modifier,
 ) {
@@ -129,6 +132,24 @@ fun EditorCanvas(
                     strokeWidth = 2.5f
                 )
             }
+        }
+
+        // 拖动手柄（泪滴）：短柄接光标底、圆点作抓取区。选区两端常驻，光标手柄按 caretHandleVisible 控制。
+        fun drawHandle(kind: HandleKind, pos: TextPosition) {
+            val layout = layoutFor(pos.line) ?: return
+            val cr = layout.getCursorRect(pos.column.coerceIn(0, engine.buffer.lineLength(pos.line)))
+            val base = lineTopPx(pos.line) - sY + (refBaselinePx - layout.firstBaseline)
+            val caretLeft = textX + cr.left
+            val caretBottom = base + cr.bottom
+            val g = EditorGeometry.handleGeometry(kind, caretLeft, base + cr.top, caretBottom, handleRadiusPx, 0f)
+            drawLine(colors.handle, Offset(caretLeft, caretBottom), Offset(g.centerX, g.centerY - handleRadiusPx), strokeWidth = 2f)
+            drawCircle(colors.handle, radius = handleRadiusPx, center = Offset(g.centerX, g.centerY))
+        }
+        if (!sel.isEmpty) {
+            drawHandle(HandleKind.SelectionStart, sel.start)
+            drawHandle(HandleKind.SelectionEnd, sel.end)
+        } else if (caretHandleVisible()) {
+            drawHandle(HandleKind.Caret, sel.start)
         }
     }
 }

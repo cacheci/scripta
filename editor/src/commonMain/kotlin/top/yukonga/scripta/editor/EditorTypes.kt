@@ -18,6 +18,8 @@ data class EditorColors(
     val gutterForeground: Color,
     val cursor: Color,
     val selection: Color,
+    /** Caret / selection drag handle (teardrop) color. */
+    val handle: Color,
 ) {
     companion object {
         /** A neutral dark default so the scaffold renders visibly before a theme is wired up. */
@@ -28,6 +30,7 @@ data class EditorColors(
             gutterForeground = Color(0xFF858585),
             cursor = Color(0xFFAEAFAD),
             selection = Color(0x553A6DA0),
+            handle = Color(0xFF4C9EEB),
         )
     }
 }
