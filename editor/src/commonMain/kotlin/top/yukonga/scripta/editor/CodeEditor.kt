@@ -12,6 +12,7 @@ import androidx.compose.foundation.gestures.drag
 import androidx.compose.foundation.gestures.rememberScrollable2DState
 import androidx.compose.foundation.gestures.scrollable2D
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
+import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -55,6 +56,7 @@ import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import top.yukonga.scripta.editor.input.editorTextInput
 import top.yukonga.scripta.editor.input.plainText
@@ -65,6 +67,7 @@ import top.yukonga.scripta.editor.render.HandleKind
 import top.yukonga.scripta.editor.render.VisualRowIndex
 import top.yukonga.scripta.editor.text.TextPosition
 import top.yukonga.scripta.editor.text.TextRange
+import kotlin.math.abs
 import kotlin.time.Duration.Companion.milliseconds
 
 /**
@@ -220,14 +223,47 @@ fun CodeEditor(
     val maxScrollY = (contentHeight - viewportHeight).coerceAtLeast(0f)
     val maxScrollX = if (softWrap) 0f else (gutterWidthPx + padXPx * 2 + widestSeen[0] - viewportWidth).coerceAtLeast(0f)
 
-    // 二维自由平移：一次拖动可斜向同时改动横纵滚动，而非被锁在单轴——两个正交的单轴 scrollable 会在拖动
-    // 起始按初始方向锁定其一。每轴各自钳到 [0, max]，返回真正消费的 delta，未消费部分交给 fling/overscroll 收尾。
+    // 二维自由平移：跟手拖动时横纵可斜向同时滚（而非被锁在单轴——两个正交的单轴 scrollable 会在拖动起始按
+    // 方向锁定其一）；但松手 fling 惯性时锁到主导轴（垂直或水平），避免斜向漂移。用独立 interactionSource 追踪
+    // 「是否正在拖动」：DragInteraction 期间为跟手，其后由 fling 驱动的回调即惯性阶段。holder 用普通数组（非
+    // State）避免每帧重组——滚动回调与 collect 都在 UI 线程、无并发。
+    val scrollInteraction = remember { MutableInteractionSource() }
+    val draggingHolder = remember { booleanArrayOf(false) }
+    val flingAxis = remember { intArrayOf(0) } // 0=未定, 1=纵, 2=横；每次新拖动清零，fling 首帧按速度方向锁定
+    LaunchedEffect(scrollInteraction) {
+        scrollInteraction.interactions.collect { i ->
+            draggingHolder[0] = when (i) {
+                is DragInteraction.Start -> true
+                is DragInteraction.Stop, is DragInteraction.Cancel -> false
+                else -> draggingHolder[0]
+            }
+        }
+    }
     val scroll2D = rememberScrollable2DState { delta ->
-        val cx = (scrollX - delta.x).coerceIn(0f, maxScrollX)
-        val cy = (scrollY - delta.y).coerceIn(0f, maxScrollY)
-        val consumed = Offset(scrollX - cx, scrollY - cy)
-        scrollX = cx; scrollY = cy
-        consumed
+        if (draggingHolder[0]) {
+            // 跟手：横纵自由平移。每帧清 flingAxis，松手后由 fling 首帧重新按速度方向锁轴。
+            flingAxis[0] = 0
+            val cx = (scrollX - delta.x).coerceIn(0f, maxScrollX)
+            val cy = (scrollY - delta.y).coerceIn(0f, maxScrollY)
+            val consumed = Offset(scrollX - cx, scrollY - cy)
+            scrollX = cx; scrollY = cy
+            consumed
+        } else {
+            // fling：首帧 delta 方向≈松手速度方向，据 |dx| vs |dy| 锁主轴、之后固定；次轴 delta 声称消费但不移动，
+            // 既不斜向漂移、也不触发次轴 overscroll 发光。主轴撞边时未消费部分交 overscroll，正常显示到底反馈。
+            if (flingAxis[0] == 0) flingAxis[0] = if (abs(delta.y) >= abs(delta.x)) 1 else 2
+            if (flingAxis[0] == 1) {
+                val cy = (scrollY - delta.y).coerceIn(0f, maxScrollY)
+                val consumedY = scrollY - cy
+                scrollY = cy
+                Offset(delta.x, consumedY)
+            } else {
+                val cx = (scrollX - delta.x).coerceIn(0f, maxScrollX)
+                val consumedX = scrollX - cx
+                scrollX = cx
+                Offset(consumedX, delta.y)
+            }
+        }
     }
 
     // 选区拖拽状态（提升到组合级，供边缘自动滚动 effect 读取）。
@@ -392,7 +428,7 @@ fun CodeEditor(
             .clipToBounds()
             .overscroll(overscroll)
             .onSizeChanged { viewportWidth = it.width.toFloat(); viewportHeight = it.height.toFloat() }
-            .scrollable2D(scroll2D, overscrollEffect = overscroll)
+            .scrollable2D(scroll2D, overscrollEffect = overscroll, interactionSource = scrollInteraction)
             .pointerInput(Unit) {
                 // 双指缩放调字号：仅在 ≥2 指时消费，单指留给滚动/选择。以双指焦点为锚——焦点下的文档
                 // 位置在缩放后仍停在焦点处（而非锚住视口顶/左，否则想放大看的那行会滑离手指）。
