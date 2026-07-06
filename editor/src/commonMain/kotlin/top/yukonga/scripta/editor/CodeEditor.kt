@@ -190,7 +190,6 @@ fun CodeEditor(
 
     // 行 -> 顶部像素 / 像素 -> 行（换行走视觉行索引，不换行走平凡公式，行为不变）。
     fun lineTopPx(line: Int): Float = if (softWrap) rowIndex.rowsBefore(line) * lineHeightPx else line * lineHeightPx
-    fun rowsOf(line: Int): Int = if (softWrap) rowIndex.rows(line) else 1
     fun lineAtPx(y: Float): Int {
         val row = (y / lineHeightPx).toInt().coerceAtLeast(0)
         return if (softWrap) rowIndex.lineAtRow(row) else row.coerceIn(0, (lineCount - 1).coerceAtLeast(0))
@@ -265,8 +264,12 @@ fun CodeEditor(
         // 跟随「活动端」(head) 而非归一化的 selEnd：Shift+上/左 反向扩选时 head 在选区顶端，视口须随之上滚。
         val caret = engine.caret
         val line = caret.line
-        val caretTop = lineTopPx(line)
-        val caretBottom = caretTop + rowsOf(line) * lineHeightPx
+        // softWrap 下露出光标所在的那一「视觉行」，而非整条可能高过视口的折行——否则长行会把光标顶出视口。
+        val curRow = if (softWrap) {
+            layoutFor(line)?.getLineForOffset(caret.column.coerceIn(0, engine.buffer.lineLength(line))) ?: 0
+        } else 0
+        val caretTop = lineTopPx(line) + curRow * lineHeightPx
+        val caretBottom = caretTop + lineHeightPx
         if (caretTop < scrollY) scrollY = caretTop
         else if (caretBottom > scrollY + viewportHeight) scrollY = caretBottom - viewportHeight
         // 横向随动：不换行时若光标越过左/右缘，滚动露出光标并留一小段余量（换行下 maxScrollX=0，跳过）。
@@ -353,6 +356,32 @@ fun CodeEditor(
             }
             withFrameNanos { }
         }
+    }
+
+    // softWrap 下按「视觉行」上下移动：一条文档行可能折成多视觉行，直接 line±1 会跨过整条长行、和用户看到的
+    // 「下一行」不符。用当前帧 layout 求光标所在视觉行与像素 x，落到目标视觉行同 x 处的列；跨视觉行时进上一/
+    // 下一文档行的末/首视觉行。desiredX 在连续上下移动间记忆（穿过更短的视觉行不丢）：仅当上次落点仍等于
+    // 当前 head 时复用，否则按当前光标重新取 x（横向移动/编辑/点按都会让 head 偏离，从而自然重置）。
+    var vGoalX by remember { mutableStateOf<Float?>(null) }
+    var vGoalCaret by remember { mutableStateOf<TextPosition?>(null) }
+    fun moveCaretVisual(dir: Int, extend: Boolean) {
+        val from = engine.caret
+        val layout = layoutFor(from.line) ?: run {
+            engine.moveCaretVertically(dir, extend); return // 无 layout 时退回按文档行移动
+        }
+        val col = from.column.coerceIn(0, engine.buffer.lineLength(from.line))
+        val curRow = layout.getLineForOffset(col)
+        val goalX = if (vGoalX != null && vGoalCaret == from) vGoalX!! else layout.getCursorRect(col).left
+        val step = EditorGeometry.visualVerticalTarget(from.line, curRow, dir, lineCount) { l -> layoutFor(l)?.lineCount ?: 1 }
+            ?: return // 文档端，不动
+        val targetLayout = if (step.line == from.line) layout else (layoutFor(step.line) ?: return)
+        val yMid = (targetLayout.getLineTop(step.row) + targetLayout.getLineBottom(step.row)) / 2f
+        val newCol = targetLayout.getOffsetForPosition(Offset(goalX, yMid))
+            .coerceIn(0, engine.buffer.lineLength(step.line))
+        val to = TextPosition(step.line, newCol)
+        if (extend) engine.extendSelectionTo(to) else engine.setCursor(to)
+        vGoalX = goalX
+        vGoalCaret = to
     }
 
     Box(
@@ -443,11 +472,11 @@ fun CodeEditor(
                         }
 
                         Key.DirectionUp -> {
-                            engine.moveCaretVertically(-1, shift); true
+                            if (softWrap) moveCaretVisual(-1, shift) else engine.moveCaretVertically(-1, shift); true
                         }
 
                         Key.DirectionDown -> {
-                            engine.moveCaretVertically(1, shift); true
+                            if (softWrap) moveCaretVisual(1, shift) else engine.moveCaretVertically(1, shift); true
                         }
 
                         Key.Backspace -> {

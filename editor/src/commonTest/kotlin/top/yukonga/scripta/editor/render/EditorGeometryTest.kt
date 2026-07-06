@@ -51,4 +51,43 @@ class EditorGeometryTest {
         assertFalse(g.hitContains(100f, 60f))  // 远在盒下方
         assertFalse(g.hitContains(130f, 28f))  // 远在盒右侧
     }
+
+    // --- B5: softWrap 视觉行上下移动落点 ---
+
+    // 文档：行0 折成 3 视觉行，行1 折成 1 行，行2 折成 2 行。
+    private val rows = intArrayOf(3, 1, 2)
+    private fun target(line: Int, row: Int, dir: Int) =
+        EditorGeometry.visualVerticalTarget(line, row, dir, rows.size) { rows[it] }
+
+    @Test
+    fun visualDownStaysWithinWrappedLine() {
+        assertEquals(VisualTarget(0, 1), target(0, 0, +1)) // 行0 视觉行 0 -> 1，仍在本行
+        assertEquals(VisualTarget(0, 2), target(0, 1, +1))
+    }
+
+    @Test
+    fun visualDownCrossesToNextLineFirstRow() {
+        assertEquals(VisualTarget(1, 0), target(0, 2, +1)) // 行0 末视觉行 -> 行1 首视觉行
+    }
+
+    @Test
+    fun visualUpCrossesToPrevLineLastRow() {
+        assertEquals(VisualTarget(0, 2), target(1, 0, -1)) // 行1 首行 -> 行0 末视觉行（2）
+    }
+
+    @Test
+    fun visualUpStaysWithinWrappedLine() {
+        assertEquals(VisualTarget(0, 1), target(0, 2, -1))
+        assertEquals(VisualTarget(0, 0), target(0, 1, -1))
+    }
+
+    @Test
+    fun visualUpAtDocumentStartReturnsNull() {
+        assertEquals(null, target(0, 0, -1)) // 文档首行首视觉行再上 -> 不动
+    }
+
+    @Test
+    fun visualDownAtDocumentEndReturnsNull() {
+        assertEquals(null, target(2, 1, +1)) // 末行末视觉行再下 -> 不动
+    }
 }
