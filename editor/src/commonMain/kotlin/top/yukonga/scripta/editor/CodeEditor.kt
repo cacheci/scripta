@@ -345,7 +345,7 @@ fun CodeEditor(
             .overscroll(overscroll)
             .onSizeChanged { viewportWidth = it.width.toFloat(); viewportHeight = it.height.toFloat() }
             .scrollable(vScroll, Orientation.Vertical, overscrollEffect = overscroll)
-            .scrollable(hScroll, Orientation.Horizontal)
+            .scrollable(hScroll, Orientation.Horizontal, overscrollEffect = overscroll)
             .pointerInput(Unit) {
                 // 双指缩放调字号：仅在 ≥2 指时消费，单指留给滚动/选择。以双指焦点为锚——焦点下的文档
                 // 位置在缩放后仍停在焦点处（而非锚住视口顶/左，否则想放大看的那行会滑离手指）。
