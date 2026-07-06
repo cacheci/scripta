@@ -31,6 +31,7 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.isCtrlPressed
@@ -42,6 +43,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
@@ -88,6 +90,7 @@ fun CodeEditor(
     // 新 Clipboard 的收发是 suspend，需一个组合级作用域来跑复制/剪切/粘贴。
     val clipboard = LocalClipboard.current
     val clipboardScope = rememberCoroutineScope()
+    val haptic = LocalHapticFeedback.current
 
     // 双指缩放调整的字号（sp）。行高、gutter、layout 随之联动重算。
     var fontSizeSp by remember { mutableFloatStateOf(14f) }
@@ -483,6 +486,7 @@ fun CodeEditor(
                 // selectionDragPos 驱动的边缘自动滚动 effect 接管。只读模式同样可用（纯选择、不改文档）。
                 detectDragGesturesAfterLongPress(
                     onDragStart = { p ->
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress) // 长按进入选择时轻震确认
                         val pos = positionAtLive.value(p)
                         selectionAnchor = pos
                         val w = engine.wordRangeAt(pos)
@@ -531,6 +535,7 @@ fun CodeEditor(
                     if (kind == null) return@awaitEachGesture // 未抓到手柄，让位给滚动/点按/长按
 
                     down.consume()
+                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove) // 抓住手柄时轻震确认
                     // 纵向抓取偏移：目标点落在光标中部而非手指处（手指压在泪滴上、光标在其上方）。
                     val gr = grabbed?.let { caretRectLive.value(it) }
                     val grabDy = if (gr != null) (gr[1] + gr[2]) / 2f - p.y else 0f
