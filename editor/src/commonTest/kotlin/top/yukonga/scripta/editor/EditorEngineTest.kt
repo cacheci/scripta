@@ -258,6 +258,30 @@ class EditorEngineTest {
         assertEquals(TextPosition(0, 7), r.end)
     }
 
+    @Test
+    fun wordRangeIncludesUnderscore() {
+        val e = EditorEngine("my_variable = 1")
+        val r = e.wordRangeAt(TextPosition(0, 4)) // 落在标识符内
+        assertEquals(TextPosition(0, 0), r.start)
+        assertEquals(TextPosition(0, 11), r.end) // 整个 my_variable
+    }
+
+    @Test
+    fun wordRangeSelectsWhitespaceRun() {
+        val e = EditorEngine("a    b")
+        val r = e.wordRangeAt(TextPosition(0, 2)) // 落在空白段
+        assertEquals(TextPosition(0, 1), r.start)
+        assertEquals(TextPosition(0, 5), r.end)
+    }
+
+    @Test
+    fun wordRangeSelectsPunctuationRun() {
+        val e = EditorEngine("a==b")
+        val r = e.wordRangeAt(TextPosition(0, 1)) // 落在 "=="
+        assertEquals(TextPosition(0, 1), r.start)
+        assertEquals(TextPosition(0, 3), r.end)
+    }
+
     // --- goal/desired column：连续上下移动记忆目标列 ---
 
     @Test

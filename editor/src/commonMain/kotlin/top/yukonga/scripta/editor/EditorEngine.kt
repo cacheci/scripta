@@ -254,14 +254,29 @@ class EditorEngine(initialText: String = "") {
 
     fun textAfterCursor(n: Int): CharSequence = textAfterCursorString(n.coerceAtLeast(0))
 
-    fun wordRangeAt(pos: TextPosition, isWordChar: (Char) -> Boolean = Char::isLetterOrDigit): TextRange {
+    /**
+     * 双击/长按选中的「词」范围：选中当前位置所在的一段连续同类字符——标识符（含 _ 与 $）、空白、标点
+     * 各自成段。此前按 isLetterOrDigit 判定，会把 my_variable/$scope 截断，双击空白或标点还返回空选区。
+     */
+    fun wordRangeAt(pos: TextPosition): TextRange {
         val p = buffer.clamp(pos)
         val line = buffer.lineText(p.line)
-        var s = p.column
-        var e = p.column
-        while (s > 0 && isWordChar(line[s - 1])) s--
-        while (e < line.length && isWordChar(line[e])) e++
+        if (line.isEmpty()) return TextRange.cursor(p)
+        // 光标停在行尾时按其左侧字符归类。
+        val idx = if (p.column < line.length) p.column else p.column - 1
+        val cls = charClass(line[idx])
+        var s = idx
+        var e = idx + 1
+        while (s > 0 && charClass(line[s - 1]) == cls) s--
+        while (e < line.length && charClass(line[e]) == cls) e++
         return TextRange(TextPosition(p.line, s), TextPosition(p.line, e))
+    }
+
+    /** 字符归类：0=空白，1=词字符（字母数字/_/$），2=标点符号。 */
+    private fun charClass(c: Char): Int = when {
+        c.isWhitespace() -> 0
+        c.isLetterOrDigit() || c == '_' || c == '$' -> 1
+        else -> 2
     }
 
     // --- 内部辅助 ----------------------------------------------------------------------------
