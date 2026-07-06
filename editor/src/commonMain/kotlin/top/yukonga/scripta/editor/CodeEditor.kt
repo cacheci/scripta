@@ -1,16 +1,16 @@
 package top.yukonga.scripta.editor
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
-import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.calculateCentroid
 import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.drag
-import androidx.compose.foundation.gestures.rememberScrollableState
-import androidx.compose.foundation.gestures.scrollable
+import androidx.compose.foundation.gestures.rememberScrollable2DState
+import androidx.compose.foundation.gestures.scrollable2D
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
@@ -73,6 +73,7 @@ import kotlin.time.Duration.Companion.milliseconds
  * 宿主须为编辑器容器消费 IME insets（如 `Modifier.imePadding()`），使可用视口高度反映键盘弹出后的
  * 可见高度——否则光标随动会把光标滚到键盘下面。
  */
+@OptIn(ExperimentalFoundationApi::class) // scrollable2D / rememberScrollable2DState 仍为实验 API
 @Composable
 fun CodeEditor(
     controller: CodeEditorController,
@@ -219,13 +220,14 @@ fun CodeEditor(
     val maxScrollY = (contentHeight - viewportHeight).coerceAtLeast(0f)
     val maxScrollX = if (softWrap) 0f else (gutterWidthPx + padXPx * 2 + widestSeen[0] - viewportWidth).coerceAtLeast(0f)
 
-    val vScroll = rememberScrollableState { delta ->
-        val c = (scrollY - delta).coerceIn(0f, maxScrollY)
-        val moved = scrollY - c; scrollY = c; moved
-    }
-    val hScroll = rememberScrollableState { delta ->
-        val c = (scrollX - delta).coerceIn(0f, maxScrollX)
-        val moved = scrollX - c; scrollX = c; moved
+    // 二维自由平移：一次拖动可斜向同时改动横纵滚动，而非被锁在单轴——两个正交的单轴 scrollable 会在拖动
+    // 起始按初始方向锁定其一。每轴各自钳到 [0, max]，返回真正消费的 delta，未消费部分交给 fling/overscroll 收尾。
+    val scroll2D = rememberScrollable2DState { delta ->
+        val cx = (scrollX - delta.x).coerceIn(0f, maxScrollX)
+        val cy = (scrollY - delta.y).coerceIn(0f, maxScrollY)
+        val consumed = Offset(scrollX - cx, scrollY - cy)
+        scrollX = cx; scrollY = cy
+        consumed
     }
 
     // 选区拖拽状态（提升到组合级，供边缘自动滚动 effect 读取）。
@@ -390,8 +392,7 @@ fun CodeEditor(
             .clipToBounds()
             .overscroll(overscroll)
             .onSizeChanged { viewportWidth = it.width.toFloat(); viewportHeight = it.height.toFloat() }
-            .scrollable(vScroll, Orientation.Vertical, overscrollEffect = overscroll)
-            .scrollable(hScroll, Orientation.Horizontal, overscrollEffect = overscroll)
+            .scrollable2D(scroll2D, overscrollEffect = overscroll)
             .pointerInput(Unit) {
                 // 双指缩放调字号：仅在 ≥2 指时消费，单指留给滚动/选择。以双指焦点为锚——焦点下的文档
                 // 位置在缩放后仍停在焦点处（而非锚住视口顶/左，否则想放大看的那行会滑离手指）。
