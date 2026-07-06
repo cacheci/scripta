@@ -317,20 +317,22 @@ fun CodeEditor(
     val liveMaxScrollY = rememberUpdatedState(maxScrollY)
     val liveMaxScrollX = rememberUpdatedState(maxScrollX)
 
-    // 选区拖拽到视口上/下热区时，按帧持续滚动并同步延伸选区；速度随进入热区的深度线性增大。
+    // 选区拖拽到视口上/下/左/右热区时，按帧持续纵横滚动并同步延伸选区；速度随进入热区的深度线性增大。
     LaunchedEffect(selectionDragPos != null) {
         if (selectionDragPos == null) return@LaunchedEffect
         while (true) {
             val pos = selectionDragPos ?: break
             val anchor = selectionAnchor ?: break
             val maxY = liveMaxScrollY.value
-            val step = edgeAutoScrollSpeed(pos.y, viewportHeight, lineHeightPx)
-            if (step != 0f && maxY > 0f) {
-                val newY = (scrollY + step).coerceIn(0f, maxY)
-                if (newY != scrollY) {
-                    scrollY = newY
-                    engine.setSelection(anchor, positionAtWithScroll(pos, newY, scrollX.coerceIn(0f, liveMaxScrollX.value)))
-                }
+            val maxX = liveMaxScrollX.value
+            val stepY = edgeAutoScrollSpeed(pos.y, viewportHeight, lineHeightPx)
+            val stepX = edgeAutoScrollSpeed(pos.x, viewportWidth, lineHeightPx)
+            val newY = if (stepY != 0f && maxY > 0f) (scrollY + stepY).coerceIn(0f, maxY) else scrollY
+            val newX = if (stepX != 0f && maxX > 0f) (scrollX + stepX).coerceIn(0f, maxX) else scrollX
+            if (newY != scrollY || newX != scrollX) {
+                scrollY = newY
+                scrollX = newX
+                engine.setSelection(anchor, positionAtWithScroll(pos, newY, newX))
             }
             withFrameNanos { }
         }
@@ -587,16 +589,17 @@ fun CodeEditor(
 }
 
 /**
- * 选区拖拽的边缘自动滚动：finger 进入顶部/底部「热区」时返回每帧滚动步长（顶部为负、底部为正），
- * 步长随进入热区的深度（含越过边缘）线性放大，上限 3 倍。不在热区返回 0。
+ * 选区拖拽的边缘自动滚动（单维度，纵横通用）：拖拽点 [pos] 进入近端/远端「热区」时返回每帧滚动步长
+ * （近端为负、远端为正），步长随进入热区的深度（含越过边缘）线性放大，上限 3 倍。不在热区返回 0。
+ * [extent] 为该维度视口尺寸，[unit] 为步长基准像素（用行高即可）。
  */
-private fun edgeAutoScrollSpeed(y: Float, viewportHeight: Float, lineHeight: Float): Float {
-    if (viewportHeight <= 0f) return 0f
-    val hot = lineHeight * 2.5f
-    val maxStep = lineHeight * 0.6f
+private fun edgeAutoScrollSpeed(pos: Float, extent: Float, unit: Float): Float {
+    if (extent <= 0f) return 0f
+    val hot = unit * 2.5f
+    val maxStep = unit * 0.6f
     return when {
-        y < hot -> -maxStep * ((hot - y) / hot).coerceIn(0f, 3f)
-        y > viewportHeight - hot -> maxStep * ((y - (viewportHeight - hot)) / hot).coerceIn(0f, 3f)
+        pos < hot -> -maxStep * ((hot - pos) / hot).coerceIn(0f, 3f)
+        pos > extent - hot -> maxStep * ((pos - (extent - hot)) / hot).coerceIn(0f, 3f)
         else -> 0f
     }
 }
