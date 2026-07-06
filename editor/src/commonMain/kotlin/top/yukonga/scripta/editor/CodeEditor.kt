@@ -290,6 +290,7 @@ fun CodeEditor(
         val base = lineTopPx(pos.line) - sY + (refBaselinePx - layout.firstBaseline)
         return floatArrayOf(gutterWidthPx + padXPx - sX + cr.left, base + cr.top, base + cr.bottom)
     }
+
     val caretRectLive = rememberUpdatedState<(TextPosition) -> FloatArray?> { caretScreenColumnRect(it) }
 
     // 边缘自动滚动 effect 的 key 是 Boolean、不随重组刷新，循环体会按值捕获滚动上限。软换行下自动滚动

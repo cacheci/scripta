@@ -78,14 +78,18 @@ class MainActivity : ComponentActivity() {
 
             // imePadding：软键盘弹出时把内容区上移到键盘之上，编辑器可用高度随之缩小，光标随动才能
             // 把光标停在键盘上方（否则 edge-to-edge 下全屏高度不变，下半屏点击/打字会被键盘遮住）。
-            Column(Modifier
-                .fillMaxSize()
-                .systemBarsPadding()
-                .imePadding()) {
-                Row(Modifier
-                    .fillMaxWidth()
-                    .background(Color(0xFF2D2D30))
-                    .padding(8.dp)) {
+            Column(
+                Modifier
+                    .fillMaxSize()
+                    .systemBarsPadding()
+                    .imePadding()
+            ) {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .background(Color(0xFF2D2D30))
+                        .padding(8.dp)
+                ) {
                     BasicText(
                         text = "  打开  ",
                         style = TextStyle(color = Color(0xFF56A3F5), fontSize = 13.sp),

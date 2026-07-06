@@ -18,6 +18,10 @@ class TextBuffer(initialText: String = "") {
     var version: Int by mutableStateOf(0)
         private set
 
+    // 整篇拼接结果缓存：未编辑时复用，避免 IME（getExtractedText）反复拉取时每次 O(n) 重建整篇
+    // （大文件下弹/收输入法卡顿的根因）。任何改动都置空，见 replace/setText。
+    private var cachedText: String? = null
+
     val lineCount: Int get() = lines.size
 
     fun lineText(line: Int): String = lines[line].toString()
@@ -45,12 +49,13 @@ class TextBuffer(initialText: String = "") {
     }
 
     fun text(): String {
+        cachedText?.let { return it }
         val sb = StringBuilder()
         for (i in lines.indices) {
             sb.append(lines[i])
             if (i != lines.size - 1) sb.append('\n')
         }
-        return sb.toString()
+        return sb.toString().also { cachedText = it }
     }
 
     /** 用 [replacement] 替换 [range]；返回插入文本末尾的光标位置。 */
@@ -75,6 +80,7 @@ class TextBuffer(initialText: String = "") {
             rebuilt.add(StringBuilder(inserted.last()).append(suffix))
         }
         lines.addAll(s.line, rebuilt)
+        cachedText = null
         version++
 
         val caretLine = s.line + inserted.size - 1
@@ -83,8 +89,11 @@ class TextBuffer(initialText: String = "") {
     }
 
     fun setText(text: String) {
+        val normalized = text.replace("\r\n", "\n").replace("\r", "\n")
         lines.clear()
-        lines.addAll(splitToLines(text.replace("\r\n", "\n").replace("\r", "\n")))
+        lines.addAll(splitToLines(normalized))
+        // 规整后的整篇即 text() 的输出，直接预热缓存——连加载后首次 getText 的 O(n) 重建都省掉。
+        cachedText = normalized
         version++
     }
 

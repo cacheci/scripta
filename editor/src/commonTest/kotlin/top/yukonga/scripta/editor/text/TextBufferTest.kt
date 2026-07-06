@@ -2,6 +2,8 @@ package top.yukonga.scripta.editor.text
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotSame
+import kotlin.test.assertSame
 
 class TextBufferTest {
     @Test
@@ -58,6 +60,24 @@ class TextBufferTest {
     fun textJoinsWithNewline() {
         val b = TextBuffer("x\ny")
         assertEquals("x\ny", b.text())
+    }
+
+    @Test
+    fun textIsCachedUntilEdited() {
+        // 大文件下 IME（getExtractedText）会反复调 text()；未编辑时必须复用同一构建结果，
+        // 否则每次弹/收输入法都重建整篇 O(n)（3MB 卡顿的根因）。
+        val b = TextBuffer("a\nb\nc")
+        val first = b.text()
+        assertEquals("a\nb\nc", first)
+        assertSame(first, b.text()) // 未编辑：命中缓存，返回同一实例
+
+        b.replace(TextRange.cursor(TextPosition(0, 1)), "X") // 编辑使缓存失效
+        val afterEdit = b.text()
+        assertNotSame(first, afterEdit)
+        assertEquals("aX\nb\nc", afterEdit)
+
+        b.setText("hello") // setText 同样失效
+        assertEquals("hello", b.text())
     }
 
     @Test
