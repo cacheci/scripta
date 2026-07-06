@@ -56,6 +56,8 @@ class MainActivity : ComponentActivity() {
             var wrap by remember { mutableStateOf(false) }
             var readOnly by remember { mutableStateOf(false) }
             var openedName by remember { mutableStateOf<String?>(null) }
+            var big by remember { mutableStateOf(false) } // false=默认示例，true=3MB 配置
+            val bigConfig = remember { bigYaml(20_000) }   // 生成一次，来回切换时复用
 
             val context = LocalContext.current
             val scope = rememberCoroutineScope()
@@ -76,6 +78,7 @@ class MainActivity : ComponentActivity() {
                         }
                         openedName = name
                         language = languageForName(name)
+                        big = false // 打开外部文件后，切换按钮回到「加载 3MB 配置」语义
                         text = content
                     } catch (e: Exception) {
                         Toast.makeText(context, "打开失败: ${e.message}", Toast.LENGTH_SHORT).show()
@@ -103,10 +106,13 @@ class MainActivity : ComponentActivity() {
                         modifier = Modifier.clickable { openDocument.launch(arrayOf("*/*")) },
                     )
                     BasicText(
-                        text = "  加载 3MB 配置  ",
+                        text = if (big) "  加载默认示例  " else "  加载 3MB 配置  ",
                         style = TextStyle(color = Color(0xFFE0E0E0), fontSize = 13.sp),
                         modifier = Modifier.clickable {
-                            text = bigYaml(20_000); language = EditorLanguage.Yaml; openedName = null
+                            big = !big
+                            text = if (big) bigConfig else SAMPLE_YAML
+                            language = EditorLanguage.Yaml
+                            openedName = null
                         },
                     )
                     BasicText(
