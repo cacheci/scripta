@@ -15,6 +15,8 @@ import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.overscroll
+import androidx.compose.foundation.rememberOverscrollEffect
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
@@ -91,6 +93,8 @@ fun CodeEditor(
     val clipboard = LocalClipboard.current
     val clipboardScope = rememberCoroutineScope()
     val haptic = LocalHapticFeedback.current
+    // 触边拉伸/回弹反馈（平台不支持时返回 null，自然退化为无）。
+    val overscroll = rememberOverscrollEffect()
 
     // 双指缩放调整的字号（sp）。行高、gutter、layout 随之联动重算。
     var fontSizeSp by remember { mutableFloatStateOf(14f) }
@@ -337,8 +341,9 @@ fun CodeEditor(
         modifier
             .background(colors.background)
             .clipToBounds()
+            .overscroll(overscroll)
             .onSizeChanged { viewportWidth = it.width.toFloat(); viewportHeight = it.height.toFloat() }
-            .scrollable(vScroll, Orientation.Vertical)
+            .scrollable(vScroll, Orientation.Vertical, overscrollEffect = overscroll)
             .scrollable(hScroll, Orientation.Horizontal)
             .pointerInput(Unit) {
                 // 双指缩放调字号：仅在 ≥2 指时消费，单指留给滚动/选择。以双指焦点为锚——焦点下的文档
