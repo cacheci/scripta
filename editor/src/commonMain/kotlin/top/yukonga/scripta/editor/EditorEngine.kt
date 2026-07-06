@@ -22,6 +22,15 @@ class EditorEngine(initialText: String = "") {
     var selection: TextRange by mutableStateOf(TextRange.cursor(TextPosition(0, 0)))
         private set
 
+    // 选区的锚点与活动端（head）：方向键 / 拖拽移动的是 head、anchor 固定；selection 恒为二者的归一化视图，
+    // 供渲染 / IME 使用。必须显式存二者——归一化会丢失方向，只靠归一化选区时 Shift+左/上 的第二步会
+    // setSelection(head, head) 塌成光标，无法继续朝反方向扩选（B1）。
+    private var anchor: TextPosition = TextPosition(0, 0)
+    private var head: TextPosition = TextPosition(0, 0)
+
+    /** 选区活动端（head）：光标闪烁 / keep-in-view 应跟随它。空选区时 head==anchor==光标位置。 */
+    val caret: TextPosition get() = head
+
     var composing: TextRange? by mutableStateOf(null)
         private set
 
@@ -86,7 +95,7 @@ class EditorEngine(initialText: String = "") {
     fun setText(text: String) {
         buffer.setText(text)
         index.invalidateFrom(0)
-        selection = TextRange.cursor(TextPosition(0, 0)) // 打开文件光标停在文首
+        collapseCaret(TextPosition(0, 0)) // 打开文件光标停在文首
         composing = null
         desiredColumn = null
         maybeNotify()
@@ -95,7 +104,9 @@ class EditorEngine(initialText: String = "") {
     // --- 选择 --------------------------------------------------------------------------------
 
     fun setSelection(a: TextPosition, b: TextPosition, keepComposing: Boolean = false) {
-        selection = TextRange(buffer.clamp(a), buffer.clamp(b)).normalized()
+        anchor = buffer.clamp(a)
+        head = buffer.clamp(b)
+        selection = TextRange(anchor, head).normalized()
         if (!keepComposing) composing = null
         desiredColumn = null
         maybeNotify()
@@ -103,17 +114,26 @@ class EditorEngine(initialText: String = "") {
 
     fun setCursor(p: TextPosition) = setSelection(p, p)
 
+    /** 保持 anchor 不动、把 head 移到 [to]，选区随之伸缩（Shift+方向键、手柄 / 拖拽扩选、视觉行上下移动）。 */
+    fun extendSelectionTo(to: TextPosition) {
+        head = buffer.clamp(to)
+        selection = TextRange(anchor, head).normalized()
+        composing = null
+        desiredColumn = null
+        maybeNotify()
+    }
+
     fun selectAll() = setSelection(TextPosition(0, 0), buffer.endPosition())
 
     // --- 编辑原语 ----------------------------------------------------------------------------
 
     private fun replaceRange(range: TextRange, text: String) {
         val startLine = range.normalized().start.line
-        val caret = buffer.replace(range, text)
+        val newCaret = buffer.replace(range, text)
         index.invalidateFrom(startLine)
         composing = null
         desiredColumn = null
-        selection = TextRange.cursor(caret)
+        collapseCaret(newCaret)
         maybeNotify()
     }
 
@@ -121,11 +141,11 @@ class EditorEngine(initialText: String = "") {
 
     fun commitText(text: String, newCursorPosition: Int) {
         val target = (composing ?: selection).normalized()
-        val caret = buffer.replace(target, text)
+        val newCaret = buffer.replace(target, text)
         index.invalidateFrom(target.start.line)
         composing = null
         desiredColumn = null
-        selection = TextRange.cursor(cursorAfterInsert(target.start, newCursorPosition, caret))
+        collapseCaret(cursorAfterInsert(target.start, newCursorPosition, newCaret))
         maybeNotify()
     }
 
@@ -151,11 +171,11 @@ class EditorEngine(initialText: String = "") {
 
     fun setComposingText(text: String, newCursorPosition: Int) {
         val target = (composing ?: selection).normalized()
-        val caret = buffer.replace(target, text)
+        val newCaret = buffer.replace(target, text)
         index.invalidateFrom(target.start.line)
-        composing = if (text.isEmpty()) null else TextRange(target.start, caret)
+        composing = if (text.isEmpty()) null else TextRange(target.start, newCaret)
         desiredColumn = null
-        selection = TextRange.cursor(cursorAfterInsert(target.start, newCursorPosition, caret))
+        collapseCaret(cursorAfterInsert(target.start, newCursorPosition, newCaret))
         maybeNotify()
     }
 
@@ -187,7 +207,7 @@ class EditorEngine(initialText: String = "") {
         index.invalidateFrom(index.positionOf(delStart).line)
         composing = null
         desiredColumn = null
-        selection = TextRange.cursor(index.positionOf(delStart))
+        collapseCaret(index.positionOf(delStart))
         maybeNotify()
     }
 
@@ -234,20 +254,20 @@ class EditorEngine(initialText: String = "") {
             setCursor(if (dir < 0) selStart else selEnd)
             return
         }
-        val from = selEnd
+        val from = head
         val target = if (dir < 0) previousCodePointPosition(from) else nextCodePointPosition(from)
         val to = target ?: from
-        if (extend) setSelection(selStart, to) else setCursor(to)
+        if (extend) extendSelectionTo(to) else setCursor(to)
     }
 
     fun moveCaretVertically(dir: Int, extend: Boolean) {
-        val from = selEnd
+        val from = head
         val goal = desiredColumn ?: from.column
         val targetLine = (from.line + dir).coerceIn(0, buffer.lineCount - 1)
         val targetCol = goal.coerceAtMost(buffer.lineLength(targetLine))
         val to = TextPosition(targetLine, targetCol)
-        if (extend) setSelection(selStart, to) else setCursor(to)
-        desiredColumn = goal // setSelection 已清空，这里恢复目标列供连续上下移动
+        if (extend) extendSelectionTo(to) else setCursor(to)
+        desiredColumn = goal // setCursor/extendSelectionTo 已清空，这里恢复目标列供连续上下移动
     }
 
     // --- 选择文本 / IME getter ---------------------------------------------------------------
@@ -293,6 +313,13 @@ class EditorEngine(initialText: String = "") {
     }
 
     // --- 内部辅助 ----------------------------------------------------------------------------
+
+    /** 折叠光标到 [p] 并同步 anchor/head：编辑原语把选区收敛为插入点时用（composing/desiredColumn 由调用方清）。 */
+    private fun collapseCaret(p: TextPosition) {
+        anchor = p
+        head = p
+        selection = TextRange.cursor(p)
+    }
 
     private fun cursorAfterInsert(insertStart: TextPosition, newCursorPosition: Int, insertedEnd: TextPosition): TextPosition {
         if (newCursorPosition == 1) return insertedEnd

@@ -262,7 +262,9 @@ fun CodeEditor(
     LaunchedEffect(engine.selection, viewportHeight, viewportWidth) {
         if (viewportHeight <= 0f) return@LaunchedEffect
         if (selectionDragPos != null) return@LaunchedEffect // 选区拖拽时由边缘自动滚动接管
-        val line = engine.selEnd.line
+        // 跟随「活动端」(head) 而非归一化的 selEnd：Shift+上/左 反向扩选时 head 在选区顶端，视口须随之上滚。
+        val caret = engine.caret
+        val line = caret.line
         val caretTop = lineTopPx(line)
         val caretBottom = caretTop + rowsOf(line) * lineHeightPx
         if (caretTop < scrollY) scrollY = caretTop
@@ -272,7 +274,7 @@ fun CodeEditor(
         if (!softWrap && viewportWidth > 0f && !engine.hasGoalColumn) {
             val layout = layoutFor(line)
             if (layout != null) {
-                val caretX = layout.getCursorRect(engine.selEnd.column.coerceAtMost(engine.buffer.lineLength(line))).left
+                val caretX = layout.getCursorRect(caret.column.coerceAtMost(engine.buffer.lineLength(line))).left
                 val textAreaW = (viewportWidth - gutterWidthPx - padXPx * 2).coerceAtLeast(1f)
                 val margin = padXPx * 3
                 if (caretX < scrollX + margin) scrollX = (caretX - margin).coerceIn(0f, maxScrollX)

@@ -334,4 +334,86 @@ class EditorEngineTest {
         e.moveCaretVertically(1, extend = false)    // 以当前列 1 下移，而非旧目标 6
         assertEquals(TextPosition(2, 1), e.selEnd)
     }
+
+    // --- B1: anchor/head 选区模型（Shift+左/上 连续扩选不塌成光标） ---
+
+    @Test
+    fun shiftLeftTwiceKeepsExtending() {
+        // 回归核心：第二次 Shift+左 曾把选区 setSelection(head, head) 塌成光标。
+        val e = EditorEngine("hello world")
+        e.setCursor(TextPosition(0, 5))
+        e.moveCaretHorizontally(-1, extend = true) // (0,4)-(0,5)
+        e.moveCaretHorizontally(-1, extend = true) // (0,3)-(0,5)，而非塌陷
+        assertEquals(TextPosition(0, 3), e.selStart)
+        assertEquals(TextPosition(0, 5), e.selEnd)
+        assertTrue(!e.selection.isEmpty)
+    }
+
+    @Test
+    fun shiftUpTwiceKeepsExtending() {
+        val e = EditorEngine("aaaa\nbbbb\ncccc")
+        e.setCursor(TextPosition(2, 2))
+        e.moveCaretVertically(-1, extend = true) // (1,2)-(2,2)
+        e.moveCaretVertically(-1, extend = true) // (0,2)-(2,2)
+        assertEquals(TextPosition(0, 2), e.selStart)
+        assertEquals(TextPosition(2, 2), e.selEnd)
+    }
+
+    @Test
+    fun caretFollowsMovingHeadOnReverseSelection() {
+        // 反向扩选时 head 在选区顶端、anchor 在底端；keep-in-view 靠 caret 跟随 head。
+        val e = EditorEngine("hello world")
+        e.setCursor(TextPosition(0, 5))
+        e.moveCaretHorizontally(-1, extend = true)
+        assertEquals(TextPosition(0, 4), e.caret)   // head 随移动端
+        assertEquals(TextPosition(0, 5), e.selEnd)  // 归一化端点仍在右
+    }
+
+    @Test
+    fun shiftRightThenLeftShrinksFromHead() {
+        val e = EditorEngine("hello world")
+        e.setCursor(TextPosition(0, 2))
+        e.moveCaretHorizontally(1, extend = true) // (0,2)-(0,3)
+        e.moveCaretHorizontally(1, extend = true) // (0,2)-(0,4)
+        e.moveCaretHorizontally(-1, extend = true) // 缩回 (0,2)-(0,3)
+        assertEquals(TextPosition(0, 2), e.selStart)
+        assertEquals(TextPosition(0, 3), e.selEnd)
+    }
+
+    @Test
+    fun extendCrossesAnchorToOtherSide() {
+        // 从右端向左收到锚点、再越过锚点翻向左侧。
+        val e = EditorEngine("hello world")
+        e.setCursor(TextPosition(0, 3))
+        e.moveCaretHorizontally(-1, extend = true) // (0,2)-(0,3)，anchor=(0,3) head=(0,2)
+        e.moveCaretHorizontally(1, extend = true)  // head 回 (0,3)，塌成光标于锚点
+        assertTrue(e.selection.isEmpty)
+        e.moveCaretHorizontally(1, extend = true)  // head 越过锚点到 (0,4)
+        assertEquals(TextPosition(0, 3), e.selStart)
+        assertEquals(TextPosition(0, 4), e.selEnd)
+    }
+
+    @Test
+    fun extendSelectionToMovesHeadKeepsAnchor() {
+        val e = EditorEngine("hello world")
+        e.setSelection(TextPosition(0, 1), TextPosition(0, 4)) // anchor=(0,1) head=(0,4)
+        e.extendSelectionTo(TextPosition(0, 2))               // 缩到 (0,1)-(0,2)
+        assertEquals(TextPosition(0, 1), e.selStart)
+        assertEquals(TextPosition(0, 2), e.selEnd)
+        e.extendSelectionTo(TextPosition(0, 0))               // head 越过 anchor -> (0,0)-(0,1)
+        assertEquals(TextPosition(0, 0), e.selStart)
+        assertEquals(TextPosition(0, 1), e.selEnd)
+    }
+
+    @Test
+    fun editingResyncsAnchorHeadForNextExtend() {
+        // collapseCaret 必须把 anchor/head 都落到新光标，否则编辑后一次 Shift+左 会用陈旧 head 扩错。
+        val e = EditorEngine("hello")
+        e.setSelection(TextPosition(0, 1), TextPosition(0, 4))
+        e.insert("X") // "hXo"，光标折叠到 (0,2)
+        assertEquals(TextPosition(0, 2), e.caret)
+        e.moveCaretHorizontally(-1, extend = true) // 从新光标 (0,2) 扩到 (0,1)-(0,2)
+        assertEquals(TextPosition(0, 1), e.selStart)
+        assertEquals(TextPosition(0, 2), e.selEnd)
+    }
 }
