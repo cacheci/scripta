@@ -6,8 +6,10 @@ import android.os.Bundle
 import android.provider.OpenableColumns
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -16,8 +18,9 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.systemBarsPadding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -42,6 +45,10 @@ import java.io.IOException
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        enableEdgeToEdge(
+            statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
+            navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
+        )
         setContent {
             val controller = rememberCodeEditorController()
             var text by remember { mutableStateOf(SAMPLE_YAML) }
@@ -76,18 +83,18 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
-            // imePadding：软键盘弹出时把内容区上移到键盘之上，编辑器可用高度随之缩小，光标随动才能
-            // 把光标停在键盘上方（否则 edge-to-edge 下全屏高度不变，下半屏点击/打字会被键盘遮住）。
+            // 全屏深色底：系统栏透明后，状态栏/导航栏区域露出的是这层底色而非白色 window 背景。
+            // 各系统栏的让位下沉到子元素（工具栏让状态栏、编辑器让导航栏+键盘），使两栏底色与相邻内容无缝。
             Column(
                 Modifier
                     .fillMaxSize()
-                    .systemBarsPadding()
-                    .imePadding()
+                    .background(Color(0xFF1E1E1E))
             ) {
                 Row(
                     Modifier
                         .fillMaxWidth()
                         .background(Color(0xFF2D2D30))
+                        .statusBarsPadding() // 工具栏底色铺进状态栏，内容下移让开状态栏
                         .padding(8.dp)
                 ) {
                     BasicText(
@@ -132,9 +139,12 @@ class MainActivity : ComponentActivity() {
                     language = language,
                     softWrap = wrap,
                     readOnly = readOnly,
+                    // 让开底部导航栏，再让开键盘；imePadding 消费在导航栏之后，底部取二者较大值（关键盘=导航栏、开键盘=键盘）。
                     modifier = Modifier
                         .fillMaxWidth()
-                        .weight(1f),
+                        .weight(1f)
+                        .navigationBarsPadding()
+                        .imePadding(),
                 )
             }
         }
