@@ -203,15 +203,21 @@ fun CodeEditor(
     val firstVisibleLine = (scrollLine - 3).coerceAtLeast(0)
     val approxRows = (viewportHeight / lineHeightPx).toInt() + 8
     val measureEnd = (firstVisibleLine + approxRows).coerceAtMost((lineCount - 1).coerceAtLeast(0))
-    var maxLineWidth = 0f
+    // 横向范围以「已测量过的最宽行」为准、只增不减（字号/宽度/换行模式变化时随 layout 缓存一起重置）。
+    // 若只按当前可见窗口最宽行算，长行纵向滚出可见区后 maxScrollX 会骤缩、把 scrollX 夹回左侧，视口瞬移；
+    // 只增不减则保持稳定横向范围（同 Monaco 维护 longest line 的效果）。非 state，写读均在组合内、不触发重组。
+    val widestSeen = remember(softWrap, widthBucket, fontSizeSp) { floatArrayOf(0f) }
     for (ln in firstVisibleLine..measureEnd) {
         val l = layoutFor(ln)
-        if (!softWrap) maxLineWidth = maxOf(maxLineWidth, l?.size?.width?.toFloat() ?: 0f)
+        if (!softWrap) {
+            val w = l?.size?.width?.toFloat() ?: 0f
+            if (w > widestSeen[0]) widestSeen[0] = w
+        }
     }
 
     val contentHeight = (if (softWrap) rowIndex.totalRows() else lineCount) * lineHeightPx
     val maxScrollY = (contentHeight - viewportHeight).coerceAtLeast(0f)
-    val maxScrollX = if (softWrap) 0f else (gutterWidthPx + padXPx * 2 + maxLineWidth - viewportWidth).coerceAtLeast(0f)
+    val maxScrollX = if (softWrap) 0f else (gutterWidthPx + padXPx * 2 + widestSeen[0] - viewportWidth).coerceAtLeast(0f)
 
     val vScroll = rememberScrollableState { delta ->
         val c = (scrollY - delta).coerceIn(0f, maxScrollY)
