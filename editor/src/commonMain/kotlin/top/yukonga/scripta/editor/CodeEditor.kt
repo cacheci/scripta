@@ -21,6 +21,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
@@ -38,9 +39,8 @@ import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
-import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
@@ -50,7 +50,10 @@ import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import top.yukonga.scripta.editor.input.editorTextInput
+import top.yukonga.scripta.editor.input.plainText
+import top.yukonga.scripta.editor.input.plainTextClipEntry
 import top.yukonga.scripta.editor.render.EditorCanvas
 import top.yukonga.scripta.editor.render.EditorGeometry
 import top.yukonga.scripta.editor.render.VisualRowIndex
@@ -80,7 +83,9 @@ fun CodeEditor(
     val measurer = rememberTextMeasurer()
     val focusRequester = remember { FocusRequester() }
     val interaction = remember { MutableInteractionSource() }
-    val clipboard = LocalClipboardManager.current
+    // 新 Clipboard 的收发是 suspend，需一个组合级作用域来跑复制/剪切/粘贴。
+    val clipboard = LocalClipboard.current
+    val clipboardScope = rememberCoroutineScope()
 
     // 双指缩放调整的字号（sp）。行高、gutter、layout 随之联动重算。
     var fontSizeSp by remember { mutableFloatStateOf(14f) }
@@ -333,16 +338,22 @@ fun CodeEditor(
                         }
 
                         Key.C -> {
-                            engine.selectedText()?.let { clipboard.setText(AnnotatedString(it)) }; true
+                            engine.selectedText()?.let { txt ->
+                                clipboardScope.launch { clipboard.setClipEntry(plainTextClipEntry(txt)) }
+                            }; true
                         }
                         // 剪切/粘贴会改动文档，只读时消费事件但不执行。
                         Key.X -> {
-                            if (!readOnly) engine.selectedText()
-                                ?.let { clipboard.setText(AnnotatedString(it)); engine.replaceSelection("") }; true
+                            if (!readOnly) engine.selectedText()?.let { txt ->
+                                clipboardScope.launch { clipboard.setClipEntry(plainTextClipEntry(txt)) }
+                                engine.replaceSelection("")
+                            }; true
                         }
 
                         Key.V -> {
-                            if (!readOnly) clipboard.getText()?.text?.let { engine.insert(it) }; true
+                            if (!readOnly) clipboardScope.launch {
+                                clipboard.getClipEntry()?.plainText()?.let { engine.insert(it) }
+                            }; true
                         }
 
                         else -> false
