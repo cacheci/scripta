@@ -89,6 +89,18 @@ class TextBufferTest {
     }
 
     @Test
+    fun replaceNormalizesCrlf() {
+        // 粘贴/提交 Windows 文本走 replace->splitToLines，应统一换行、不留裸 CR。
+        val b = TextBuffer("")
+        b.replace(TextRange.cursor(TextPosition(0, 0)), "a\r\nb\rc")
+        assertEquals(3, b.lineCount)
+        assertEquals("a", b.lineText(0))
+        assertEquals("b", b.lineText(1))
+        assertEquals("c", b.lineText(2))
+        assertEquals("a\nb\nc", b.text())
+    }
+
+    @Test
     fun setTextNormalizesCrlf() {
         val b = TextBuffer("x")
         b.setText("p\r\nq")

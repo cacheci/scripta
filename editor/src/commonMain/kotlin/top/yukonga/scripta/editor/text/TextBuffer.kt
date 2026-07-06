@@ -97,7 +97,10 @@ class TextBuffer(initialText: String = "") {
         version++
     }
 
-    private fun splitToLines(text: String): MutableList<StringBuilder> {
+    private fun splitToLines(raw: String): MutableList<StringBuilder> {
+        // 统一换行 CRLF/CR -> LF：让粘贴/IME 提交等所有写入路径都不残留裸 CR（此前只有 setText 规整）。
+        // 用 indexOf 兜底：无 CR 的常见情况不额外分配字符串。
+        val text = if (raw.indexOf('\r') >= 0) raw.replace("\r\n", "\n").replace("\r", "\n") else raw
         val out = ArrayList<StringBuilder>()
         var start = 0
         var i = 0
