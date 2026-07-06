@@ -276,6 +276,15 @@ class EditorEngine(initialText: String = "") {
         return TextRange(TextPosition(p.line, s), TextPosition(p.line, e))
     }
 
+    /**
+     * 从锚定词 [anchorWord] 扩展到 [at] 所在词：选区并到两词的最小外包区间，两端吸附词边界。
+     * 用于长按选词后的拖拽/边缘自动滚动扩展——即便 [at] 仍落在锚定词内（手指未动）也保留整词、不塌成光标。
+     */
+    fun selectWordRange(anchorWord: TextRange, at: TextPosition) {
+        val cur = wordRangeAt(at)
+        setSelection(minOf(anchorWord.start, cur.start), maxOf(anchorWord.end, cur.end))
+    }
+
     /** 字符归类：0=空白，1=词字符（字母数字/_/$），2=标点符号。 */
     private fun charClass(c: Char): Int = when {
         c.isWhitespace() -> 0

@@ -64,6 +64,7 @@ import top.yukonga.scripta.editor.render.EditorGeometry
 import top.yukonga.scripta.editor.render.HandleKind
 import top.yukonga.scripta.editor.render.VisualRowIndex
 import top.yukonga.scripta.editor.text.TextPosition
+import top.yukonga.scripta.editor.text.TextRange
 import kotlin.time.Duration.Companion.milliseconds
 
 /**
@@ -229,7 +230,9 @@ fun CodeEditor(
     }
 
     // 选区拖拽状态（提升到组合级，供边缘自动滚动 effect 读取）。
+    // selectionAnchor：字符级锚（手柄端点拖拽）；selectionWordAnchor：词级锚（长按选词后按词扩展）。
     var selectionAnchor by remember { mutableStateOf<TextPosition?>(null) }
+    var selectionWordAnchor by remember { mutableStateOf<TextRange?>(null) }
     var selectionDragPos by remember { mutableStateOf<Offset?>(null) }
 
     var blink by remember { mutableStateOf(true) }
@@ -325,11 +328,14 @@ fun CodeEditor(
     val liveMaxScrollX = rememberUpdatedState(maxScrollX)
 
     // 选区拖拽到视口上/下/左/右热区时，按帧持续纵横滚动并同步延伸选区；速度随进入热区的深度线性增大。
+    // 词锚（长按选词）按词粒度扩展、字符锚（手柄端点）按字符扩展。
     LaunchedEffect(selectionDragPos != null) {
         if (selectionDragPos == null) return@LaunchedEffect
         while (true) {
             val pos = selectionDragPos ?: break
-            val anchor = selectionAnchor ?: break
+            val wordAnchor = selectionWordAnchor
+            val charAnchor = selectionAnchor
+            if (wordAnchor == null && charAnchor == null) break
             val maxY = liveMaxScrollY.value
             val maxX = liveMaxScrollX.value
             val stepY = edgeAutoScrollSpeed(pos.y, viewportHeight, lineHeightPx)
@@ -339,7 +345,9 @@ fun CodeEditor(
             if (newY != scrollY || newX != scrollX) {
                 scrollY = newY
                 scrollX = newX
-                engine.setSelection(anchor, positionAtWithScroll(pos, newY, newX))
+                val caret = positionAtWithScroll(pos, newY, newX)
+                if (wordAnchor != null) engine.selectWordRange(wordAnchor, caret)
+                else charAnchor?.let { engine.setSelection(it, caret) }
             }
             withFrameNanos { }
         }
@@ -500,19 +508,21 @@ fun CodeEditor(
                 detectDragGesturesAfterLongPress(
                     onDragStart = { p ->
                         haptic.performHapticFeedback(HapticFeedbackType.LongPress) // 长按进入选择时轻震确认
-                        val pos = positionAtLive.value(p)
-                        selectionAnchor = pos
-                        val w = engine.wordRangeAt(pos)
+                        val w = engine.wordRangeAt(positionAtLive.value(p))
                         engine.setSelection(w.start, w.end)
+                        // 锚定整个初选词、按词粒度扩展（不用按下点作字符锚）——否则边缘自动滚动或首次拖拽会把
+                        // 刚选好的词塌成字符级光标（长按靠近视口边缘时尤其明显：一选中就瞬间消失）。
+                        selectionWordAnchor = w
+                        selectionAnchor = null
                         focusRequester.requestFocus()
                         selectionDragPos = p
                     },
                     onDrag = { change, _ ->
                         selectionDragPos = change.position
-                        selectionAnchor?.let { engine.setSelection(it, positionAtLive.value(change.position)) }
+                        selectionWordAnchor?.let { engine.selectWordRange(it, positionAtLive.value(change.position)) }
                     },
-                    onDragEnd = { selectionDragPos = null },
-                    onDragCancel = { selectionDragPos = null },
+                    onDragEnd = { selectionDragPos = null; selectionWordAnchor = null },
+                    onDragCancel = { selectionDragPos = null; selectionWordAnchor = null },
                 )
             }
             // 手柄拖拽：抓到光标/选区端点手柄即接管——重定位光标或调整选区端点；未抓到则不消费，让位给
@@ -561,6 +571,7 @@ fun CodeEditor(
                     } else {
                         val a = anchor!!
                         selectionAnchor = a
+                        selectionWordAnchor = null // 端点拖拽走字符级锚
                         selectionDragPos = p
                         engine.setSelection(a, mapped(p))
                         drag(down.id) { change ->

@@ -282,6 +282,37 @@ class EditorEngineTest {
         assertEquals(TextPosition(0, 3), r.end)
     }
 
+    // --- 长按选词后按词粒度扩展（selectWordRange） ---
+
+    @Test
+    fun selectWordRangeUnionsAnchorAndTargetWord() {
+        val e = EditorEngine("foo bar baz")
+        val anchor = e.wordRangeAt(TextPosition(0, 1)) // "foo"
+        e.selectWordRange(anchor, TextPosition(0, 9))  // 目标落在 "baz"
+        assertEquals(TextPosition(0, 0), e.selStart)
+        assertEquals(TextPosition(0, 11), e.selEnd)    // foo..baz
+    }
+
+    @Test
+    fun selectWordRangeBackwardStillUnions() {
+        val e = EditorEngine("foo bar baz")
+        val anchor = e.wordRangeAt(TextPosition(0, 9)) // "baz"
+        e.selectWordRange(anchor, TextPosition(0, 1))  // 反向拖到 "foo"
+        assertEquals(TextPosition(0, 0), e.selStart)
+        assertEquals(TextPosition(0, 11), e.selEnd)
+    }
+
+    @Test
+    fun selectWordRangeSameWordKeepsWholeWord() {
+        // 手指仍落在锚定词内（如长按后边缘自动滚动首帧）时，必须保留整词、不塌成光标——这正是回归 bug 的核心。
+        val e = EditorEngine("foo bar baz")
+        val anchor = e.wordRangeAt(TextPosition(0, 5)) // "bar"
+        e.selectWordRange(anchor, TextPosition(0, 6))  // 仍在 "bar" 内
+        assertEquals(TextPosition(0, 4), e.selStart)
+        assertEquals(TextPosition(0, 7), e.selEnd)
+        assertTrue(!e.selection.isEmpty)
+    }
+
     // --- goal/desired column：连续上下移动记忆目标列 ---
 
     @Test
