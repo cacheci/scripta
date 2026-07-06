@@ -25,6 +25,10 @@ class EditorEngine(initialText: String = "") {
     var composing: TextRange? by mutableStateOf(null)
         private set
 
+    // 上下移动记忆的目标列：穿过较短行时列被临时夹小，但回到长行仍恢复原列。仅纵向移动保持，
+    // 横向移动 / 编辑 / 显式设光标都清空（见 setSelection 与各编辑原语）。
+    private var desiredColumn: Int? = null
+
     val selStart: TextPosition get() = selection.start
     val selEnd: TextPosition get() = selection.end
 
@@ -80,6 +84,7 @@ class EditorEngine(initialText: String = "") {
         index.invalidateFrom(0)
         selection = TextRange.cursor(TextPosition(0, 0)) // 打开文件光标停在文首
         composing = null
+        desiredColumn = null
         maybeNotify()
     }
 
@@ -88,6 +93,7 @@ class EditorEngine(initialText: String = "") {
     fun setSelection(a: TextPosition, b: TextPosition, keepComposing: Boolean = false) {
         selection = TextRange(buffer.clamp(a), buffer.clamp(b)).normalized()
         if (!keepComposing) composing = null
+        desiredColumn = null
         maybeNotify()
     }
 
@@ -102,6 +108,7 @@ class EditorEngine(initialText: String = "") {
         val caret = buffer.replace(range, text)
         index.invalidateFrom(startLine)
         composing = null
+        desiredColumn = null
         selection = TextRange.cursor(caret)
         maybeNotify()
     }
@@ -113,6 +120,7 @@ class EditorEngine(initialText: String = "") {
         val caret = buffer.replace(target, text)
         index.invalidateFrom(target.start.line)
         composing = null
+        desiredColumn = null
         selection = TextRange.cursor(cursorAfterInsert(target.start, newCursorPosition, caret))
         maybeNotify()
     }
@@ -142,6 +150,7 @@ class EditorEngine(initialText: String = "") {
         val caret = buffer.replace(target, text)
         index.invalidateFrom(target.start.line)
         composing = if (text.isEmpty()) null else TextRange(target.start, caret)
+        desiredColumn = null
         selection = TextRange.cursor(cursorAfterInsert(target.start, newCursorPosition, caret))
         maybeNotify()
     }
@@ -173,6 +182,7 @@ class EditorEngine(initialText: String = "") {
         buffer.replace(TextRange(index.positionOf(delStart), index.positionOf(selS)), "")
         index.invalidateFrom(index.positionOf(delStart).line)
         composing = null
+        desiredColumn = null
         selection = TextRange.cursor(index.positionOf(delStart))
         maybeNotify()
     }
@@ -228,10 +238,12 @@ class EditorEngine(initialText: String = "") {
 
     fun moveCaretVertically(dir: Int, extend: Boolean) {
         val from = selEnd
+        val goal = desiredColumn ?: from.column
         val targetLine = (from.line + dir).coerceIn(0, buffer.lineCount - 1)
-        val targetCol = from.column.coerceAtMost(buffer.lineLength(targetLine))
+        val targetCol = goal.coerceAtMost(buffer.lineLength(targetLine))
         val to = TextPosition(targetLine, targetCol)
         if (extend) setSelection(selStart, to) else setCursor(to)
+        desiredColumn = goal // setSelection 已清空，这里恢复目标列供连续上下移动
     }
 
     // --- 选择文本 / IME getter ---------------------------------------------------------------

@@ -257,4 +257,26 @@ class EditorEngineTest {
         assertEquals(TextPosition(0, 4), r.start)
         assertEquals(TextPosition(0, 7), r.end)
     }
+
+    // --- goal/desired column：连续上下移动记忆目标列 ---
+
+    @Test
+    fun verticalMovementRestoresGoalColumnAcrossShortLine() {
+        val e = EditorEngine("abcdefgh\nxy\nabcdefgh")
+        e.setCursor(TextPosition(0, 6))
+        e.moveCaretVertically(1, extend = false) // 短行 "xy" -> 夹到列 2
+        assertEquals(TextPosition(1, 2), e.selEnd)
+        e.moveCaretVertically(1, extend = false) // 回到长行 -> 恢复目标列 6
+        assertEquals(TextPosition(2, 6), e.selEnd)
+    }
+
+    @Test
+    fun horizontalMoveResetsGoalColumn() {
+        val e = EditorEngine("abcdefgh\nxy\nabcdefgh")
+        e.setCursor(TextPosition(0, 6))
+        e.moveCaretVertically(1, extend = false)    // -> (1,2)
+        e.moveCaretHorizontally(-1, extend = false) // -> (1,1)，重置目标列
+        e.moveCaretVertically(1, extend = false)    // 以当前列 1 下移，而非旧目标 6
+        assertEquals(TextPosition(2, 1), e.selEnd)
+    }
 }
