@@ -159,8 +159,8 @@ fun CodeEditor(
 
     // 逐行 layout 缓存：只在宽度/模式/字号变化时整表失效，不再以 version 失效——否则每敲一个字符整表丢弃、
     // 可见行全部重测。失效改由下方按行内容比对精确处理（内容变了才重测；插入/删除行的下标平移也会因内容
-    // 不符自然重测）。超上限即清空，防止长时间滚动大文件无界增长。
-    val layoutCache = remember(softWrap, widthBucket, fontSizeSp) { HashMap<Int, Pair<String, TextLayoutResult>>() }
+    // 不符自然重测）。有界 LRU：超上限淘汰最久未用，而非整表 clear() 把可见行一并丢弃。
+    val layoutCache = remember(softWrap, widthBucket, fontSizeSp) { LruCache<Int, Pair<String, TextLayoutResult>>(4096) }
     fun layoutFor(line: Int): TextLayoutResult? {
         if (line < 0 || line >= engine.buffer.lineCount) return null
         val content = engine.buffer.lineText(line)
@@ -172,7 +172,6 @@ fun CodeEditor(
                 return it.second
             }
         }
-        if (layoutCache.size > 4096) layoutCache.clear()
         val measured = if (softWrap) {
             measurer.measure(
                 content,

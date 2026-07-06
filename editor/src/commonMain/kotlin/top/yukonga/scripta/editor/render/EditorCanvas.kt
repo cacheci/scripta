@@ -12,6 +12,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.drawText
 import top.yukonga.scripta.editor.EditorColors
 import top.yukonga.scripta.editor.EditorEngine
+import top.yukonga.scripta.editor.LruCache
 import top.yukonga.scripta.editor.text.TextPosition
 
 /**
@@ -43,9 +44,9 @@ fun EditorCanvas(
     modifier: Modifier = Modifier,
 ) {
     // 行号 layout 缓存：行号只依赖行下标与 numberStyle，draw 里逐帧重测会击穿 TextMeasurer 仅 8 条的
-    // 内部缓存（可见行常几十行、必然大量 miss）。numberStyle 变化（字号/配色）时整表失效；超上限即清空，
-    // 防止长时间滚动大文件时无界增长。缓存的是与逐帧重测完全相同的 layout，输出不变、仅省掉重复布局。
-    val numberLayoutCache = remember(numberStyle) { HashMap<Int, TextLayoutResult>() }
+    // 内部缓存（可见行常几十行、必然大量 miss）。numberStyle 变化（字号/配色）时整表失效；有界 LRU
+    // 超上限淘汰最久未用，避免整表 clear() 把可见行号一并丢弃。缓存与逐帧重测输出一致，仅省掉重复布局。
+    val numberLayoutCache = remember(numberStyle) { LruCache<Int, TextLayoutResult>(4096) }
     Canvas(modifier) {
         // 在 draw 阶段读取滚动量：滚动只触发本画布重绘，不再让上层每滚 1px 重组。
         val sX = scrollX()
@@ -94,8 +95,7 @@ fun EditorCanvas(
                 }
                 // 正文（含换行后的多视觉行）
                 drawText(layout, color = colors.foreground, topLeft = Offset(textX, textTop))
-                // 行号（基线对齐到正文基线）；命中缓存则跳过重测
-                if (numberLayoutCache.size > 4096) numberLayoutCache.clear()
+                // 行号（基线对齐到正文基线）；命中缓存则跳过重测（LRU 自动淘汰，无需手动清空）
                 val num = numberLayoutCache.getOrPut(line) { textMeasurer.measure((line + 1).toString(), numberStyle) }
                 val numTop = top + (refBaselinePx - num.firstBaseline)
                 drawText(num, color = colors.gutterForeground, topLeft = Offset(gutterWidthPx - padXPx - num.size.width, numTop))
