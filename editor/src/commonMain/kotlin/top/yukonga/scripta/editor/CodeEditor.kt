@@ -122,6 +122,10 @@ fun CodeEditor(
     // 双指缩放调整的字号（sp）。行高、gutter、layout 随之联动重算。缩放手势把连续比例量化到 ZOOM_STEP_SP 一档，
     // 只在过档时改一次（见下方缩放 pointerInput）——避免逐事件全链 remember 重建 + 整屏重 shaping 的连续抖动（P3）。
     var fontSizeSp by remember { mutableFloatStateOf(14f) }
+    // 换行下缩放的焦点还原：换行时折行非均匀、k 公式不精确会跳变，故记住手指下的文档字符 (line,col) 与其视口 y，
+    // 换字号重排后由 LaunchedEffect(fontSizeSp) 把它移回同一视口 y。非缩放/不换行时不用（不换行走 k 公式，精确）。
+    var zoomFocalPos by remember { mutableStateOf<TextPosition?>(null) }
+    var zoomFocalViewportY by remember { mutableFloatStateOf(0f) }
     val lineHeightSp = fontSizeSp * 1.5f
     // trim = None 让 lineHeight 对「单行」也生效，否则默认 Trim.Both 会让单行退回字体自然高度，
     // 中文回退字体度量更大 -> 含中文的行更高、错位。Center 让内容在统一行高内居中。
@@ -282,6 +286,20 @@ fun CodeEditor(
     LaunchedEffect(maxScrollY, maxScrollX) {
         scrollY = scrollY.coerceIn(0f, maxScrollY)
         scrollX = scrollX.coerceIn(0f, maxScrollX)
+    }
+
+    // 换行下缩放焦点还原：换字号触发本效应，在可见行按新字号重排后，把记住的焦点文档字符移回原视口 y。k 公式对
+    // 换行的非均匀折行不成立（大字号一档折行行数变化大 → 逐档跳变），故换行改用字符锚定 + post-layout 校正。声明
+    // 在 re-clamp 效应之后 → 同帧内 scrollY 以本效应为准。不换行 scrollY 已由缩放 pointerInput 的 k 公式当场设好。
+    LaunchedEffect(fontSizeSp) {
+        if (!softWrap) return@LaunchedEffect
+        val fp = zoomFocalPos ?: return@LaunchedEffect
+        val layout = layoutFor(fp.line) ?: return@LaunchedEffect
+        val col = fp.column.coerceIn(0, engine.buffer.lineLength(fp.line))
+        val vr = layout.getLineForOffset(col) // 焦点字符所在的视觉行
+        val charCenterInLine = (layout.getLineTop(vr) + layout.getLineBottom(vr)) / 2f
+        val charContentY = lineTopPx(fp.line) + charCenterInLine // 焦点字符中心在内容坐标里的 y
+        scrollY = (charContentY - zoomFocalViewportY).coerceIn(0f, maxScrollY) // 令其回到原视口 y
     }
 
     // 二维自由平移：跟手拖动时横纵可斜向同时滚（而非被锁在单轴——两个正交的单轴 scrollable 会在拖动起始按
@@ -536,28 +554,38 @@ fun CodeEditor(
                                 val old = fontSizeSp
                                 val next = (accum / ZOOM_STEP_SP).roundToInt() * ZOOM_STEP_SP
                                 if (next != old) {
-                                    val k = next / old
                                     val c = event.calculateCentroid(useCurrent = true)
-                                    // 锚基取「当前显示的钳制值」：下游只在 draw/命中处按 maxScroll 钳制、不回写 state，
-                                    // 直接以原始 scrollY/X 为锚会让其溢出上界并累积、反向缩放黏边。用 liveMaxScrollY/X 先钳回显示值。
-                                    val baseY = scrollY.coerceIn(0f, liveMaxScrollY.value)
-                                    val baseX = scrollX.coerceIn(0f, liveMaxScrollX.value)
-                                    fontSizeSp = next
-                                    if (c != Offset.Unspecified) {
-                                        // 令焦点处内容缩放后不动：newScroll = (base + focal) * k - focal。纵向无 gutter 项、恒精确。
-                                        scrollY = ((baseY + c.y) * k - c.y).coerceAtLeast(0f)
-                                        // 横向：焦点相对正文起点 = c.x - (gutter + padX)。gutter 宽随字号变（行号字号 = 字号-1），
-                                        // 故 base+focal 项用「旧宽 fxOld」、末项用「新宽 fxNew」，否则字号大变时横向漂移。新宽按行号字号
-                                        // 比例从 live 旧宽线性推得（等宽 advance ∝ 字号，亚像素误差可忽略），只用 live 值、无需重测。
-                                        val gutterOld = hitGutterWidth.value
-                                        val numFontOld = (old - 1f).coerceAtLeast(6f)
-                                        val numFontNew = (next - 1f).coerceAtLeast(6f)
-                                        val gutterNew = (gutterOld - padXPx * 2) * (numFontNew / numFontOld) + padXPx * 2
-                                        val fxOld = c.x - (gutterOld + padXPx)
-                                        val fxNew = c.x - (gutterNew + padXPx)
-                                        scrollX = ((baseX + fxOld) * k - fxNew).coerceAtLeast(0f)
+                                    if (softWrap) {
+                                        // 换行：折行非均匀、k 公式会跳变。记住焦点处文档字符与其视口 y，换字号后由上方
+                                        // LaunchedEffect(fontSizeSp) 在重排完把它移回同一视口 y（横向 maxScrollX=0，无需处理）。
+                                        if (c != Offset.Unspecified) {
+                                            zoomFocalPos = positionAtLive.value(c) // 旧字号下手指下的文档字符
+                                            zoomFocalViewportY = c.y
+                                        }
+                                        fontSizeSp = next
                                     } else {
-                                        scrollY = baseY * k
+                                        val k = next / old
+                                        // 锚基取「当前显示的钳制值」：下游只在 draw/命中处按 maxScroll 钳制、不回写 state，
+                                        // 直接以原始 scrollY/X 为锚会让其溢出上界并累积、反向缩放黏边。用 liveMaxScrollY/X 先钳回显示值。
+                                        val baseY = scrollY.coerceIn(0f, liveMaxScrollY.value)
+                                        val baseX = scrollX.coerceIn(0f, liveMaxScrollX.value)
+                                        fontSizeSp = next
+                                        if (c != Offset.Unspecified) {
+                                            // 令焦点处内容缩放后不动：newScroll = (base + focal) * k - focal。纵向无 gutter 项、恒精确。
+                                            scrollY = ((baseY + c.y) * k - c.y).coerceAtLeast(0f)
+                                            // 横向：焦点相对正文起点 = c.x - (gutter + padX)。gutter 宽随字号变（行号字号 = 字号-1），
+                                            // 故 base+focal 项用「旧宽 fxOld」、末项用「新宽 fxNew」，否则字号大变时横向漂移。新宽按行号字号
+                                            // 比例从 live 旧宽线性推得（等宽 advance ∝ 字号，亚像素误差可忽略），只用 live 值、无需重测。
+                                            val gutterOld = hitGutterWidth.value
+                                            val numFontOld = (old - 1f).coerceAtLeast(6f)
+                                            val numFontNew = (next - 1f).coerceAtLeast(6f)
+                                            val gutterNew = (gutterOld - padXPx * 2) * (numFontNew / numFontOld) + padXPx * 2
+                                            val fxOld = c.x - (gutterOld + padXPx)
+                                            val fxNew = c.x - (gutterNew + padXPx)
+                                            scrollX = ((baseX + fxOld) * k - fxNew).coerceAtLeast(0f)
+                                        } else {
+                                            scrollY = baseY * k
+                                        }
                                     }
                                 }
                                 event.changes.forEach { it.consume() } // 消费缩放事件，防止落到滚动
