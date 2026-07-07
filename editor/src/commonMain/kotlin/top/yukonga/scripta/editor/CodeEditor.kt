@@ -294,12 +294,16 @@ fun CodeEditor(
     val firstVisibleLine = (scrollLine - 3).coerceAtLeast(0)
     val approxRows = (viewportHeight / lineHeightPx).toInt() + 8
     val measureEnd = (firstVisibleLine + approxRows).coerceAtMost((lineCount - 1).coerceAtLeast(0))
-    // 横向范围以「已测量过的最宽行」为准、只增不减（字号/宽度/换行模式变化时随 layout 缓存一起重置）。
-    // 若只按当前可见窗口最宽行算，长行纵向滚出可见区后 maxScrollX 会骤缩、把 scrollX 夹回左侧，视口瞬移；
-    // 只增不减则保持稳定横向范围（同 Monaco 维护 longest line 的效果）。非 state，写读均在组合内、不触发重组。
-    // 加 engine.contentGeneration 作 key：换文档时重置横向范围，避免旧文档最宽行（如超长行）残留、
-    // 让新文档也能右滚特别多。同文档编辑不改 generation，仍保持「只增不减」（M7）。
-    val widestSeen = remember(softWrap, widthBucket, fontSizeSp, engine.contentGeneration) { floatArrayOf(0f) }
+    // 横向范围以「已测量过的最宽行」为准、只增不减（长行纵向滚出可见区后 maxScrollX 不骤缩、不把 scrollX 夹回，视口不瞬移；
+    // 同 Monaco 维护 longest line）。非 state，写读均在组合内、不触发重组。engine.contentGeneration 作 key：换文档时重置。
+    // **不以 fontSizeSp 为 key**：否则双指缩放换字号会 remember 重置、只从「当前可见行」重填——若最宽行（超长网格行）此刻已滚出
+    // 视口，widestSeen 骤缩为可见短行、maxScrollX 崩塌 → 缩放松手时 scrollX 被夹到可见行右缘、横向大跳。改为跨字号保留：
+    // widestSeen[1] 记上次测量字号，字号变时把宽度 [0] 按比例缩放（等宽 advance / layout 宽 ∝ 字号），随后可见行只增补。
+    val widestSeen = remember(softWrap, widthBucket, engine.contentGeneration) { floatArrayOf(0f, fontSizeSp) }
+    if (widestSeen[1] != fontSizeSp) {
+        if (widestSeen[1] > 0f) widestSeen[0] *= fontSizeSp / widestSeen[1]
+        widestSeen[1] = fontSizeSp
+    }
     for (ln in firstVisibleLine..measureEnd) {
         if (isGridLine(ln)) {
             val w = engine.buffer.lineLength(ln) * charWpx // 网格行宽度算术得出，不整行测量
