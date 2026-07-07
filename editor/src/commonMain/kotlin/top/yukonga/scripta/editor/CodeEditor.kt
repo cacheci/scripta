@@ -344,9 +344,13 @@ fun CodeEditor(
     fun pingCaretHandle() {
         caretHandleVisible = true; caretHandleToken++
     }
-    LaunchedEffect(caretHandleToken) {
-        if (caretHandleToken == 0) return@LaunchedEffect
-        delay(4000.milliseconds); caretHandleVisible = false
+    // 4s 无操作自动隐藏。用 snapshotFlow 观察 token，不把它当组合期 effect key——否则每次点按落光标/抓放手柄
+    // （pingCaretHandle 自增 token）都多一次整体重组。collectLatest 在新 ping 到达时取消上一轮 delay = 重置计时。
+    LaunchedEffect(Unit) {
+        snapshotFlow { caretHandleToken }.collectLatest { token ->
+            if (token == 0) return@collectLatest
+            delay(4000.milliseconds); caretHandleVisible = false
+        }
     }
     LaunchedEffect(engine.buffer.version) {
         // 任何编辑都收起光标手柄；首帧亦触发，但此时本就不可见、无副作用。
