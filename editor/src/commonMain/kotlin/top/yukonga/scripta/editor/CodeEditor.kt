@@ -74,6 +74,13 @@ import kotlin.time.Duration.Companion.milliseconds
 private const val LONG_LINE_THRESHOLD = 2000
 
 /**
+ * layoutFor 逐行缓存条目。[validatedVersion] 记「上次确认与文档一致时的 buffer.version」：命中且版本相等即
+ * 说明此后无任何编辑、本行文本必与 [content] 相同，可零分配零比较直接复用 [layout]（稳态滚动/闪烁/拖选帧全
+ * 走这里）；版本变了才回退按 [content] 比对——编辑他行不改本行文本，仍命中并刷新版本戳，唯内容不符才重测。
+ */
+private class CachedLayout(var validatedVersion: Int, val content: String, val layout: TextLayoutResult)
+
+/**
  * 虚拟化代码编辑器入口。自绘 + 视口虚拟化 + 自管 IME（Android），不使用 BasicTextField。
  *
  * 宿主须为编辑器容器消费 IME insets（如 `Modifier.imePadding()`），使可用视口高度反映键盘弹出后的
@@ -179,18 +186,26 @@ fun CodeEditor(
     // 逐行 layout 缓存：只在宽度/模式/字号变化时整表失效，不再以 version 失效——否则每敲一个字符整表丢弃、
     // 可见行全部重测。失效改由下方按行内容比对精确处理（内容变了才重测；插入/删除行的下标平移也会因内容
     // 不符自然重测）。有界 LRU：超上限淘汰最久未用，而非整表 clear() 把可见行一并丢弃。
-    val layoutCache = remember(softWrap, widthBucket, fontSizeSp) { LruCache<Int, Pair<String, TextLayoutResult>>(4096) }
+    val layoutCache = remember(softWrap, widthBucket, fontSizeSp) { LruCache<Int, CachedLayout>(4096) }
     fun layoutFor(line: Int): TextLayoutResult? {
         if (line < 0 || line >= engine.buffer.lineCount) return null
         if (isGridLine(line)) return null // 网格行不整行测量：绘制走可见列切片（EditorCanvas），几何走等宽算术
+        val version = engine.buffer.version
+        val cached = layoutCache[line]
+        // 快路：version 未变说明自上次校验以来无编辑 → 行文本必然未变，跳过 lineText 物化 + O(len) 比较，零分配。
+        if (cached != null && cached.validatedVersion == version) {
+            // 命中也回填视觉行数：rowIndex 仍以 lineCount 为 key、行数变化时会重建为 1 行估算，而命中
+            // 分支不经下面的 setRows，需在此补上，否则软换行的行高/定位会退回估算值。
+            if (softWrap) rowIndex.setRows(line, cached.layout.lineCount)
+            return cached.layout
+        }
+        // version 变了（发生过编辑）：按内容精确校验。lineText 至多取一次。编辑他行不改本行文本 → 内容仍相符，
+        // 刷新版本戳复用 layout；内容不符（本行被编辑，或插入/删除行的下标平移到别的行）才真正重测。
         val content = engine.buffer.lineText(line)
-        layoutCache[line]?.let {
-            if (it.first == content) {
-                // 命中也回填视觉行数：rowIndex 仍以 lineCount 为 key、行数变化时会重建为 1 行估算，而命中
-                // 分支不经下面的 setRows，需在此补上，否则软换行的行高/定位会退回估算值。
-                if (softWrap) rowIndex.setRows(line, it.second.lineCount)
-                return it.second
-            }
+        if (cached != null && cached.content == content) {
+            cached.validatedVersion = version
+            if (softWrap) rowIndex.setRows(line, cached.layout.lineCount)
+            return cached.layout
         }
         val measured = if (softWrap) {
             measurer.measure(
@@ -202,7 +217,7 @@ fun CodeEditor(
         } else {
             measurer.measure(content, textStyle, softWrap = false)
         }
-        layoutCache[line] = content to measured
+        layoutCache[line] = CachedLayout(version, content, measured)
         if (softWrap) rowIndex.setRows(line, measured.lineCount)
         return measured
     }
