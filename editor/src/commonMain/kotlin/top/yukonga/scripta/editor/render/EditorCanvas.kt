@@ -157,8 +157,13 @@ fun EditorCanvas(
                         // 正文：只切落在视口内的列窗口测量，避免 shaping 整行。列窗口量化到 32 列倍数（左取整、右上取整
                         // 钳到行长），使小幅横滚落在同一量化窗口 → 命中 gridSliceCache，仅每跨 32 列才重测；多切的 ≤64
                         // 个字符落在视口外、由 clipToBounds 裁掉，视觉无差。
-                        val textAreaWidth = (size.width - gutterWidthPx - padXPx * 2).coerceAtLeast(1f)
-                        val cols = EditorGeometry.gridVisibleColumns(sX, textAreaWidth, charW, lineLen)
+                        // 可见列窗口按预览缩放补偿：缩小(s<1)时屏上可见内容宽 = size.width/s（更宽），左缘内容 x 随焦点缩放偏移
+                        // hTranslateText/s；否则切片覆盖不到缩小后新露出的右侧列 → 长行右段缺失。s==1 退化为原状（仅切文本区）。
+                        val cols = if (s == 1f) {
+                            EditorGeometry.gridVisibleColumns(sX, (size.width - gutterWidthPx - padXPx * 2).coerceAtLeast(1f), charW, lineLen)
+                        } else {
+                            EditorGeometry.gridVisibleColumns(sX - hTranslateText / s, size.width / s, charW, lineLen)
+                        }
                         if (cols.last > cols.first) {
                             val q = GRID_SLICE_QUANTUM
                             val qStart = (cols.first / q) * q
