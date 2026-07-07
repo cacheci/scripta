@@ -6,6 +6,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextMeasurer
 import androidx.compose.ui.text.TextStyle
@@ -53,7 +54,6 @@ fun EditorCanvas(
     firstVisibleLine: () -> Int,
     lineTopPx: (Int) -> Float,
     refBaselinePx: Float,
-    caretVisible: () -> Boolean,
     caretHandleVisible: () -> Boolean,
     handleRadiusPx: Float,
     layoutFor: (Int) -> TextLayoutResult?,
@@ -205,28 +205,7 @@ fun EditorCanvas(
             }
         }
 
-        // 光标（无选择、闪烁可见时）。caretVisible 在 draw 里读取 blink，使闪烁只触发本画布重绘、
-        // 不再让 CodeEditor 与本可组合每 500ms 整体重组。
-        if (sel.isEmpty && caretVisible()) {
-            val cLine = sel.start.line
-            if (isGridLine(cLine)) {
-                val textTop = lineTopPx(cLine) - sY + (refBaselinePx - gridRefBaseline)
-                val x = textX + sel.start.column.coerceIn(0, engine.buffer.lineLength(cLine)) * charW
-                drawLine(colors.cursor, Offset(x, textTop + gridRefCursorTop + 1f), Offset(x, textTop + gridRefCursorBottom - 1f), strokeWidth = 2.5f)
-            } else {
-                val layout = layoutFor(cLine)
-                if (layout != null) {
-                    val textTop = lineTopPx(cLine) - sY + (refBaselinePx - layout.firstBaseline)
-                    val cr = layout.getCursorRect(sel.start.column.coerceIn(0, engine.buffer.lineLength(cLine)))
-                    drawLine(
-                        colors.cursor,
-                        Offset(textX + cr.left, textTop + cr.top + 1f),
-                        Offset(textX + cr.left, textTop + cr.bottom - 1f),
-                        strokeWidth = 2.5f
-                    )
-                }
-            }
-        }
+        // 光标不在此画：拆到独立的 [CursorOverlay] 图层，闪烁只切该层 alpha、不重放整块正文画布（见 P10）。
 
         // 拖动手柄（泪滴）：短柄接光标底、圆点作抓取区。选区两端常驻，光标手柄按 caretHandleVisible 控制。
         // 网格行用等宽算术定光标矩形，其余走该行 layout。
@@ -267,6 +246,52 @@ fun EditorCanvas(
             val num = numberLayoutCache.getOrPut(line) { textMeasurer.measure((line + 1).toString(), numberStyle) }
             val numTop = top + (refBaselinePx - num.firstBaseline)
             drawText(num, color = colors.gutterForeground, topLeft = Offset(gutterWidthPx - padXPx - num.size.width - gutterScroll, numTop))
+        }
+    }
+}
+
+/**
+ * 只画光标线的独立图层，叠在 [EditorCanvas] 之上。光标位置随滚动 / 光标移动在 draw 阶段实时计算（仅这根细线
+ * 重绘）；闪烁 [caretVisible]（= blink）在 graphicsLayer 的 alpha 里读取——每 500ms 翻转只更新该层 alpha
+ * （layer 属性 / 合成），不重放正文画布整块的 drawText / gutter / 行号。无选择时才画（有选择时画布画选区、不画光标）。
+ * 坐标算法与移除前 EditorCanvas 内的光标段完全一致。
+ */
+@Composable
+fun CursorOverlay(
+    engine: EditorEngine,
+    colors: EditorColors,
+    caretVisible: () -> Boolean,
+    scrollX: () -> Float,
+    scrollY: () -> Float,
+    lineTopPx: (Int) -> Float,
+    refBaselinePx: Float,
+    layoutFor: (Int) -> TextLayoutResult?,
+    charW: Float,
+    isGridLine: (Int) -> Boolean,
+    gridRefBaseline: Float,
+    gridRefCursorTop: Float,
+    gridRefCursorBottom: Float,
+    gutterWidthPx: Float,
+    padXPx: Float,
+    modifier: Modifier = Modifier,
+) {
+    Canvas(modifier.graphicsLayer { alpha = if (caretVisible()) 1f else 0f }) {
+        val sel = engine.selection
+        if (!sel.isEmpty) return@Canvas // 有选择时不画光标：画布已画选区覆盖层
+        val sX = scrollX()
+        val sY = scrollY()
+        val textX = gutterWidthPx + padXPx - sX
+        val cLine = sel.start.line
+        val col = sel.start.column.coerceIn(0, engine.buffer.lineLength(cLine))
+        if (isGridLine(cLine)) {
+            val textTop = lineTopPx(cLine) - sY + (refBaselinePx - gridRefBaseline)
+            val x = textX + col * charW
+            drawLine(colors.cursor, Offset(x, textTop + gridRefCursorTop + 1f), Offset(x, textTop + gridRefCursorBottom - 1f), strokeWidth = 2.5f)
+        } else {
+            val layout = layoutFor(cLine) ?: return@Canvas
+            val textTop = lineTopPx(cLine) - sY + (refBaselinePx - layout.firstBaseline)
+            val cr = layout.getCursorRect(col)
+            drawLine(colors.cursor, Offset(textX + cr.left, textTop + cr.top + 1f), Offset(textX + cr.left, textTop + cr.bottom - 1f), strokeWidth = 2.5f)
         }
     }
 }

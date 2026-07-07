@@ -63,6 +63,7 @@ import kotlinx.coroutines.launch
 import top.yukonga.scripta.editor.input.editorTextInput
 import top.yukonga.scripta.editor.input.plainText
 import top.yukonga.scripta.editor.input.plainTextClipEntry
+import top.yukonga.scripta.editor.render.CursorOverlay
 import top.yukonga.scripta.editor.render.EditorCanvas
 import top.yukonga.scripta.editor.render.EditorGeometry
 import top.yukonga.scripta.editor.render.HandleKind
@@ -748,7 +749,6 @@ fun CodeEditor(
             firstVisibleLine = { (lineAtPx(scrollY.coerceIn(0f, maxScrollY)) - 3).coerceAtLeast(0) },
             lineTopPx = ::lineTopPx,
             refBaselinePx = refBaselinePx,
-            caretVisible = { !readOnly && blink },
             caretHandleVisible = { caretHandleVisible && !readOnly },
             handleRadiusPx = handleRadiusPx,
             layoutFor = ::layoutFor,
@@ -757,6 +757,25 @@ fun CodeEditor(
             gridRefBaseline = gridRefBaseline,
             gridRefCursorTop = gridRefCursor.top,
             gridRefCursorBottom = gridRefCursor.bottom,
+            modifier = Modifier.fillMaxSize(),
+        )
+        // 光标独立图层：叠在正文之上，blink 只切本层 alpha、不重放正文画布（P10）。
+        CursorOverlay(
+            engine = engine,
+            colors = colors,
+            caretVisible = { !readOnly && blink },
+            scrollX = { scrollX.coerceIn(0f, maxScrollX) },
+            scrollY = { scrollY.coerceIn(0f, maxScrollY) },
+            lineTopPx = ::lineTopPx,
+            refBaselinePx = refBaselinePx,
+            layoutFor = ::layoutFor,
+            charW = charWpx,
+            isGridLine = ::isGridLine,
+            gridRefBaseline = gridRefBaseline,
+            gridRefCursorTop = gridRefCursor.top,
+            gridRefCursorBottom = gridRefCursor.bottom,
+            gutterWidthPx = gutterWidthPx,
+            padXPx = padXPx,
             modifier = Modifier.fillMaxSize(),
         )
     }
