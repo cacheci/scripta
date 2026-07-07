@@ -70,6 +70,9 @@ import top.yukonga.scripta.editor.text.TextRange
 import kotlin.math.abs
 import kotlin.time.Duration.Companion.milliseconds
 
+/** 超过此字符数的行走「网格」快路：不整行 shaping，只按可见列窗口等宽算术定位/绘制（M2，仅不换行）。 */
+private const val LONG_LINE_THRESHOLD = 2000
+
 /**
  * 虚拟化代码编辑器入口。自绘 + 视口虚拟化 + 自管 IME（Android），不使用 BasicTextField。
  *
@@ -139,6 +142,15 @@ fun CodeEditor(
     // 统一基线：以拉丁参考行的 firstBaseline 为目标，各行绘制时按差值平移，抵消 CJK/拉丁字体度量差
     // 导致的整行基线偏移（含中文的行里英文向下偏移）。
     val refBaselinePx = remember(textStyle) { measurer.measure("Ag", textStyle).firstBaseline }
+
+    // M2：等宽字符宽 + 超长「网格行」判定。超阈值的行不整行 shaping，只按可见列窗口做等宽算术定位/绘制
+    // （仅不换行；softWrap 下仍走整行折行测量）。charW = 参考字符 "0" 的 advance；垂直度量复用其 cursorRect。
+    val charWpx = remember(textStyle) { measurer.measure("0", textStyle).size.width.toFloat() }
+    val gridRef = remember(textStyle) { measurer.measure("0", textStyle) }
+    val gridRefBaseline = gridRef.firstBaseline
+    val gridRefCursor = remember(gridRef) { gridRef.getCursorRect(0) }
+    fun isGridLine(line: Int): Boolean =
+        !softWrap && charWpx > 0f && engine.buffer.lineLength(line) > LONG_LINE_THRESHOLD
 
     // 读取 buffer.version（快照 state）订阅编辑：内容/行数变化后整体重组，gutter 宽、内容高、可见窗口随之
     // 刷新。此读取本身即订阅，勿删。逐行 layout 缓存不再以它失效（否则每键整表重测），失效见 layoutFor。
@@ -212,10 +224,15 @@ fun CodeEditor(
     // 只增不减则保持稳定横向范围（同 Monaco 维护 longest line 的效果）。非 state，写读均在组合内、不触发重组。
     val widestSeen = remember(softWrap, widthBucket, fontSizeSp) { floatArrayOf(0f) }
     for (ln in firstVisibleLine..measureEnd) {
-        val l = layoutFor(ln)
-        if (!softWrap) {
-            val w = l?.size?.width?.toFloat() ?: 0f
+        if (isGridLine(ln)) {
+            val w = engine.buffer.lineLength(ln) * charWpx // 网格行宽度算术得出，不整行测量
             if (w > widestSeen[0]) widestSeen[0] = w
+        } else {
+            val l = layoutFor(ln)
+            if (!softWrap) {
+                val w = l?.size?.width?.toFloat() ?: 0f
+                if (w > widestSeen[0]) widestSeen[0] = w
+            }
         }
     }
 
@@ -313,9 +330,9 @@ fun CodeEditor(
         // 横向随动：不换行时若光标越过左/右缘，滚动露出光标并留一小段余量（换行下 maxScrollX=0，跳过）。
         // 纯纵向导航（目标列生效）时跳过——否则目标列在短/长行间夹变会让视口横向来回 snap，很突兀。
         if (!softWrap && viewportWidth > 0f && !engine.hasGoalColumn) {
-            val layout = layoutFor(line)
-            if (layout != null) {
-                val caretX = layout.getCursorRect(caret.column.coerceAtMost(engine.buffer.lineLength(line))).left
+            val col = caret.column.coerceAtMost(engine.buffer.lineLength(line))
+            val caretX = if (isGridLine(line)) col * charWpx else layoutFor(line)?.getCursorRect(col)?.left
+            if (caretX != null) {
                 val textAreaW = (viewportWidth - gutterWidthPx - padXPx * 2).coerceAtLeast(1f)
                 val margin = padXPx * 3
                 if (caretX < scrollX + margin) scrollX = (caretX - margin).coerceIn(0f, maxScrollX)
@@ -331,8 +348,11 @@ fun CodeEditor(
 
     fun positionAtWithScroll(offset: Offset, sY: Float, sX: Float): TextPosition {
         val ln = lineAtPx(offset.y + sY)
-        val layout = layoutFor(ln)
         val localX = (offset.x - hitGutterWidth.value - padXPx + sX).coerceAtLeast(0f)
+        if (isGridLine(ln)) {
+            return TextPosition(ln, EditorGeometry.gridXToColumn(localX, charWpx, engine.buffer.lineLength(ln)))
+        }
+        val layout = layoutFor(ln)
         // 撤销绘制时的基线平移，换回该行 layout 自身坐标再命中。
         val shift = refBaselinePx - (layout?.firstBaseline ?: refBaselinePx)
         val layoutY = (offset.y + sY) - lineTopPx(ln) - shift
@@ -353,11 +373,16 @@ fun CodeEditor(
     // 光标/端点在屏幕上的矩形 [left, top, bottom]，供手柄命中测试。读活的 scroll/layout；用 rememberUpdatedState
     // 让固定 key 的手势闭包取到当前帧几何（与 positionAtLive 同理）。与画布 drawHandle 的坐标算法一致。
     fun caretScreenColumnRect(pos: TextPosition): FloatArray? {
-        val layout = layoutFor(pos.line) ?: return null
         val col = pos.column.coerceIn(0, engine.buffer.lineLength(pos.line))
-        val cr = layout.getCursorRect(col)
         val sY = scrollY.coerceIn(0f, maxScrollY)
         val sX = scrollX.coerceIn(0f, maxScrollX)
+        if (isGridLine(pos.line)) {
+            val base = lineTopPx(pos.line) - sY + (refBaselinePx - gridRefBaseline)
+            val x = gutterWidthPx + padXPx - sX + col * charWpx
+            return floatArrayOf(x, base + gridRefCursor.top, base + gridRefCursor.bottom)
+        }
+        val layout = layoutFor(pos.line) ?: return null
+        val cr = layout.getCursorRect(col)
         val base = lineTopPx(pos.line) - sY + (refBaselinePx - layout.firstBaseline)
         return floatArrayOf(gutterWidthPx + padXPx - sX + cr.left, base + cr.top, base + cr.bottom)
     }
