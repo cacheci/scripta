@@ -32,6 +32,11 @@ class EditorEngine(initialText: String = "") {
     var composing: TextRange? by mutableStateOf(null)
         private set
 
+    /** 整篇替换（setText / 换文档 / 打开文件）的代次，编辑不改。视图层据此重置「跨文档累积」的量
+     *  （如横向滚动范围 widestSeen），避免旧文档的最宽行残留到新文档。 */
+    var contentGeneration: Int by mutableStateOf(0)
+        private set
+
     // 上下移动记忆的目标列：穿过较短行时列被临时夹小，但回到长行仍恢复原列。仅纵向移动保持，
     // 横向移动 / 编辑 / 显式设光标都清空（见 setSelection 与各编辑原语）。
     private var desiredColumn: Int? = null
@@ -95,6 +100,7 @@ class EditorEngine(initialText: String = "") {
         collapseCaret(TextPosition(0, 0)) // 打开文件光标停在文首
         composing = null
         desiredColumn = null
+        contentGeneration++ // 换文档：视图层据此重置横向范围等跨文档累积量
         maybeNotify()
     }
 

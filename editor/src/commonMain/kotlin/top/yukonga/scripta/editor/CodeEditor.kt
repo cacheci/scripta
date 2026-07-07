@@ -223,7 +223,9 @@ fun CodeEditor(
     // 横向范围以「已测量过的最宽行」为准、只增不减（字号/宽度/换行模式变化时随 layout 缓存一起重置）。
     // 若只按当前可见窗口最宽行算，长行纵向滚出可见区后 maxScrollX 会骤缩、把 scrollX 夹回左侧，视口瞬移；
     // 只增不减则保持稳定横向范围（同 Monaco 维护 longest line 的效果）。非 state，写读均在组合内、不触发重组。
-    val widestSeen = remember(softWrap, widthBucket, fontSizeSp) { floatArrayOf(0f) }
+    // 加 engine.contentGeneration 作 key：换文档时重置横向范围，避免旧文档最宽行（如超长行）残留、
+    // 让新文档也能右滚特别多。同文档编辑不改 generation，仍保持「只增不减」（M7）。
+    val widestSeen = remember(softWrap, widthBucket, fontSizeSp, engine.contentGeneration) { floatArrayOf(0f) }
     for (ln in firstVisibleLine..measureEnd) {
         if (isGridLine(ln)) {
             val w = engine.buffer.lineLength(ln) * charWpx // 网格行宽度算术得出，不整行测量

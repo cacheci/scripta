@@ -406,6 +406,18 @@ class EditorEngineTest {
     }
 
     @Test
+    fun contentGenerationBumpsOnSetTextNotEdit() {
+        // 换文档（setText）+1，普通编辑不改——视图层据此在换文档时重置横向范围（widestSeen）。
+        val e = EditorEngine("abc")
+        val g0 = e.contentGeneration
+        e.setText("xyz")
+        assertEquals(g0 + 1, e.contentGeneration)
+        val g1 = e.contentGeneration
+        e.insert("Q"); e.backspace()
+        assertEquals(g1, e.contentGeneration) // 编辑不改代次
+    }
+
+    @Test
     fun editingResyncsAnchorHeadForNextExtend() {
         // collapseCaret 必须把 anchor/head 都落到新光标，否则编辑后一次 Shift+左 会用陈旧 head 扩错。
         val e = EditorEngine("hello")
