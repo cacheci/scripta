@@ -556,11 +556,16 @@ fun CodeEditor(
                                 if (next != old) {
                                     val c = event.calculateCentroid(useCurrent = true)
                                     if (softWrap) {
-                                        // 换行：折行非均匀、k 公式会跳变。记住焦点处文档字符与其视口 y，换字号后由上方
-                                        // LaunchedEffect(fontSizeSp) 在重排完把它移回同一视口 y（横向 maxScrollX=0，无需处理）。
+                                        // 换行：记住焦点处文档字符与其视口 y，换字号后由上方 LaunchedEffect(fontSizeSp)
+                                        // 在重排完把它移回同一视口 y（横向 maxScrollX=0，无需处理）。
                                         if (c != Offset.Unspecified) {
                                             zoomFocalPos = positionAtLive.value(c) // 旧字号下手指下的文档字符
                                             zoomFocalViewportY = c.y
+                                            // 同步先用 k 公式设一个近似 scrollY（以上一步已校正值为基、很接近）：否则换字号后本帧
+                                            // 仍读旧 scrollY + 新行高，firstVisibleLine 会指到早得多的行、渲染猛跳一帧（超长折行行尤甚），
+                                            // 下一帧 effect 才拉回 → 连续缩放持续闪跳。同步近似值让本帧就渲染在正确处，effect 只做微调。
+                                            val baseY = scrollY.coerceIn(0f, liveMaxScrollY.value)
+                                            scrollY = ((baseY + c.y) * (next / old) - c.y).coerceAtLeast(0f)
                                         }
                                         fontSizeSp = next
                                     } else {
