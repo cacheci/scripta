@@ -164,8 +164,9 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-/** 打开外部文件的字节上限：整篇仍需入内存，超堆容量必 OOM，超此值直接拒绝并提示。 */
-private const val MAX_OPEN_BYTES = 32L * 1024 * 1024
+/** 打开外部文件的字节上限：整篇仍需入内存，超堆容量必 OOM，超此值直接拒绝并提示。piece-table 后
+ *  常驻降到 ~1×（original 只读一份、无行链表/索引），故较行链表时代翻倍。 */
+private const val MAX_OPEN_BYTES = 64L * 1024 * 1024
 
 /** 查询 SAF 文档的显示名，用于语言判定与工具栏展示；查不到返回 null。 */
 private fun queryDisplayName(context: Context, uri: Uri): String? =
