@@ -35,6 +35,8 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
@@ -115,8 +117,14 @@ fun CodeEditor(
     // 触边拉伸/回弹反馈（平台不支持时返回 null，自然退化为无）。
     val overscroll = rememberOverscrollEffect()
 
-    // 双指缩放调整的字号（sp）。行高、gutter、layout 随之联动重算。
+    // 双指缩放调整的字号（sp）。行高、gutter、layout 随之联动重算。仅在缩放手势「抬手」时改一次（见下方缩放
+    // pointerInput），手势期间不动——避免逐事件全链 remember 重建 + 整屏重 shaping 的连续掉帧/抖动（P3）。
     var fontSizeSp by remember { mutableFloatStateOf(14f) }
+    // 缩放预览：手势期间只用 graphicsLayer 位图缩放正文层（不改字号、不重排 → 零抖动），抬手才提交真实字号。
+    // previewScale=1 表示无预览；previewPivot 是缩放枢轴（双指焦点，手势起始固定）。二者只在 graphicsLayer 的
+    // layer 阶段被读，逐帧写只更新该层变换、不触发组合/重排。
+    var previewScale by remember { mutableFloatStateOf(1f) }
+    var previewPivot by remember { mutableStateOf(Offset.Zero) }
     val lineHeightSp = fontSizeSp * 1.5f
     // trim = None 让 lineHeight 对「单行」也生效，否则默认 Trim.Both 会让单行退回字体自然高度，
     // 中文回退字体度量更大 -> 含中文的行更高、错位。Center 让内容在统一行高内居中。
@@ -511,40 +519,53 @@ fun CodeEditor(
             .onSizeChanged { viewportWidth = it.width.toFloat(); viewportHeight = it.height.toFloat() }
             .scrollable2D(scroll2D, overscrollEffect = overscroll, interactionSource = scrollInteraction)
             .pointerInput(Unit) {
-                // 双指缩放调字号：仅在 ≥2 指时消费，单指留给滚动/选择。以双指焦点为锚——焦点下的文档
-                // 位置在缩放后仍停在焦点处（而非锚住视口顶/左，否则想放大看的那行会滑离手指）。
+                // 双指缩放：仅在 ≥2 指时消费，单指留给滚动/选择。手势期间只累积 previewScale 用 graphicsLayer 位图
+                // 缩放正文层（不改字号、不重排 → 零抖动），指数降回 <2 或全部抬手才提交一次真实字号（一次重排）。
+                // 以起始双指焦点为枢轴：预览绕枢轴缩放，提交时按同一焦点公式调滚动 → 焦点处内容在预览↔提交间不跳。
+                fun commitZoom(pivot: Offset) {
+                    val old = fontSizeSp
+                    val next = (old * previewScale).coerceIn(8f, 40f)
+                    if (next != old && pivot != Offset.Unspecified) {
+                        val k = next / old
+                        // 锚基取「当前显示的钳制值」：下游只在 draw/命中处按 maxScroll 钳制、不回写 state，直接以原始
+                        // scrollY/X 为锚会让其溢出上界并累积、反向缩放黏边。用 liveMaxScrollY/X 先钳回显示值再代入焦点公式。
+                        val baseY = scrollY.coerceIn(0f, liveMaxScrollY.value)
+                        val baseX = scrollX.coerceIn(0f, liveMaxScrollX.value)
+                        fontSizeSp = next // 触发唯一一次重排；下一帧 previewScale=1 与新字号同步呈现，焦点处不跳
+                        // 令焦点处内容缩放后不动：newScroll = (base + focal) * k - focal。
+                        scrollY = ((baseY + pivot.y) * k - pivot.y).coerceAtLeast(0f)
+                        // 焦点相对正文起点；gutter 常量项随字号变、此处用旧宽近似，字号大变时横向有微量漂移（纵向精确）。
+                        val fx = pivot.x - (hitGutterWidth.value + padXPx)
+                        scrollX = ((baseX + fx) * k - fx).coerceAtLeast(0f)
+                    }
+                    previewScale = 1f
+                }
                 awaitEachGesture {
                     awaitFirstDown(requireUnconsumed = false)
+                    var zooming = false
+                    var pivot = Offset.Unspecified
                     do {
                         val event = awaitPointerEvent()
                         if (event.changes.count { it.pressed } >= 2) {
-                            val zoom = event.calculateZoom()
-                            if (zoom != 1f) {
-                                val old = fontSizeSp
-                                val next = (old * zoom).coerceIn(8f, 40f)
-                                if (next != old) {
-                                    val k = next / old
-                                    val c = event.calculateCentroid(useCurrent = true)
-                                    // 锚基取「当前显示的钳制值」：下游只在 draw/命中处按 maxScroll 钳制、不回写 state，
-                                    // 若直接以原始 scrollY/X 为锚，边缘缩放会让其溢出上界并逐帧累积，反向缩放时黏在
-                                    // 边缘不跟随焦点。用 liveMaxScrollY/X 先钳回显示值再代入焦点公式。
-                                    val baseY = scrollY.coerceIn(0f, liveMaxScrollY.value)
-                                    val baseX = scrollX.coerceIn(0f, liveMaxScrollX.value)
-                                    fontSizeSp = next
-                                    if (c != Offset.Unspecified) {
-                                        // 令焦点处内容缩放后不动：newScroll = (base + focal) * k - focal。
-                                        scrollY = ((baseY + c.y) * k - c.y).coerceAtLeast(0f)
-                                        // 焦点相对正文起点；gutter 常量项随字号变、此处用旧宽近似，字号大变时横向有微量漂移（纵向精确）。
-                                        val fx = c.x - (hitGutterWidth.value + padXPx)
-                                        scrollX = ((baseX + fx) * k - fx).coerceAtLeast(0f)
-                                    } else {
-                                        scrollY = baseY * k
-                                    }
-                                }
-                                event.changes.forEach { it.consume() }
+                            if (!zooming) {
+                                // 缩放起始：固定枢轴 = 当前双指焦点
+                                zooming = true
+                                pivot = event.calculateCentroid(useCurrent = true)
+                                if (pivot != Offset.Unspecified) previewPivot = pivot
                             }
+                            val zoom = event.calculateZoom()
+                            if (zooming && pivot != Offset.Unspecified && zoom != 1f) {
+                                // 累积预览比例，钳制使提交后的字号 ∈ [8,40]
+                                previewScale = (previewScale * zoom).coerceIn(8f / fontSizeSp, 40f / fontSizeSp)
+                            }
+                            event.changes.forEach { it.consume() }
+                        } else if (zooming) {
+                            // 指数降到 1：立即提交（不等全部抬手），避免残留手指在预览态下滚动被缩放的内容
+                            commitZoom(pivot)
+                            zooming = false
                         }
                     } while (event.changes.any { it.pressed })
+                    if (zooming) commitZoom(pivot)
                 }
             }
             .editorTextInput(engine, enabled = !readOnly)
@@ -735,52 +756,71 @@ fun CodeEditor(
                 }
             }
     ) {
-        EditorCanvas(
-            engine = engine,
-            colors = colors,
-            textMeasurer = measurer,
-            textStyle = textStyle,
-            numberStyle = numberStyle,
-            lineHeightPx = lineHeightPx,
-            gutterWidthPx = gutterWidthPx,
-            padXPx = padXPx,
-            lineNumberMode = lineNumberMode,
-            scrollX = { scrollX.coerceIn(0f, maxScrollX) },
-            scrollY = { scrollY.coerceIn(0f, maxScrollY) },
-            // 与 scrollY/scrollX 传参同源钳制：maxScroll 骤减那一帧（底部捏合放大 / 收起 IME），行锚与像素
-            // 偏移都读钳制后的 scrollY，二者恒定锚同一窗口，不再顶部留一帧空白（re-clamp effect 下一帧才生效）。
-            firstVisibleLine = { (lineAtPx(scrollY.coerceIn(0f, maxScrollY)) - 3).coerceAtLeast(0) },
-            lineTopPx = ::lineTopPx,
-            refBaselinePx = refBaselinePx,
-            caretHandleVisible = { caretHandleVisible && !readOnly },
-            handleRadiusPx = handleRadiusPx,
-            layoutFor = ::layoutFor,
-            charW = charWpx,
-            isGridLine = ::isGridLine,
-            gridRefBaseline = gridRefBaseline,
-            gridRefCursorTop = gridRefCursor.top,
-            gridRefCursorBottom = gridRefCursor.bottom,
-            modifier = Modifier.fillMaxSize(),
-        )
-        // 光标独立图层：叠在正文之上，blink 只切本层 alpha、不重放正文画布（P10）。
-        CursorOverlay(
-            engine = engine,
-            colors = colors,
-            caretVisible = { !readOnly && blink },
-            scrollX = { scrollX.coerceIn(0f, maxScrollX) },
-            scrollY = { scrollY.coerceIn(0f, maxScrollY) },
-            lineTopPx = ::lineTopPx,
-            refBaselinePx = refBaselinePx,
-            layoutFor = ::layoutFor,
-            charW = charWpx,
-            isGridLine = ::isGridLine,
-            gridRefBaseline = gridRefBaseline,
-            gridRefCursorTop = gridRefCursor.top,
-            gridRefCursorBottom = gridRefCursor.bottom,
-            gutterWidthPx = gutterWidthPx,
-            padXPx = padXPx,
-            modifier = Modifier.fillMaxSize(),
-        )
+        // 正文层包一层 graphicsLayer：缩放手势期间按 previewScale 绕 previewPivot 位图缩放（不重排、不重绘子
+        // 节点，只更新该层变换 → 零抖动）；非缩放时 previewScale=1、变换恒等、无开销。抬手提交后字号真变、
+        // previewScale 回 1，下一帧真实布局与预览在焦点处吻合、不跳。超出视口的放大部分由外层 clipToBounds 裁掉。
+        Box(
+            Modifier.fillMaxSize().graphicsLayer {
+                val s = previewScale
+                if (s != 1f) {
+                    scaleX = s
+                    scaleY = s
+                    if (size.width > 0f && size.height > 0f) {
+                        transformOrigin = TransformOrigin(
+                            (previewPivot.x / size.width).coerceIn(0f, 1f),
+                            (previewPivot.y / size.height).coerceIn(0f, 1f),
+                        )
+                    }
+                }
+            }
+        ) {
+            EditorCanvas(
+                engine = engine,
+                colors = colors,
+                textMeasurer = measurer,
+                textStyle = textStyle,
+                numberStyle = numberStyle,
+                lineHeightPx = lineHeightPx,
+                gutterWidthPx = gutterWidthPx,
+                padXPx = padXPx,
+                lineNumberMode = lineNumberMode,
+                scrollX = { scrollX.coerceIn(0f, maxScrollX) },
+                scrollY = { scrollY.coerceIn(0f, maxScrollY) },
+                // 与 scrollY/scrollX 传参同源钳制：maxScroll 骤减那一帧（底部捏合放大 / 收起 IME），行锚与像素
+                // 偏移都读钳制后的 scrollY，二者恒定锚同一窗口，不再顶部留一帧空白（re-clamp effect 下一帧才生效）。
+                firstVisibleLine = { (lineAtPx(scrollY.coerceIn(0f, maxScrollY)) - 3).coerceAtLeast(0) },
+                lineTopPx = ::lineTopPx,
+                refBaselinePx = refBaselinePx,
+                caretHandleVisible = { caretHandleVisible && !readOnly },
+                handleRadiusPx = handleRadiusPx,
+                layoutFor = ::layoutFor,
+                charW = charWpx,
+                isGridLine = ::isGridLine,
+                gridRefBaseline = gridRefBaseline,
+                gridRefCursorTop = gridRefCursor.top,
+                gridRefCursorBottom = gridRefCursor.bottom,
+                modifier = Modifier.fillMaxSize(),
+            )
+            // 光标独立图层：叠在正文之上，blink 只切本层 alpha、不重放正文画布（P10）。
+            CursorOverlay(
+                engine = engine,
+                colors = colors,
+                caretVisible = { !readOnly && blink },
+                scrollX = { scrollX.coerceIn(0f, maxScrollX) },
+                scrollY = { scrollY.coerceIn(0f, maxScrollY) },
+                lineTopPx = ::lineTopPx,
+                refBaselinePx = refBaselinePx,
+                layoutFor = ::layoutFor,
+                charW = charWpx,
+                isGridLine = ::isGridLine,
+                gridRefBaseline = gridRefBaseline,
+                gridRefCursorTop = gridRefCursor.top,
+                gridRefCursorBottom = gridRefCursor.bottom,
+                gutterWidthPx = gutterWidthPx,
+                padXPx = padXPx,
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
     }
 }
 
