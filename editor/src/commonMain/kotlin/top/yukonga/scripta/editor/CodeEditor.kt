@@ -68,17 +68,42 @@ import top.yukonga.scripta.editor.render.EditorCanvas
 import top.yukonga.scripta.editor.render.EditorGeometry
 import top.yukonga.scripta.editor.render.HandleKind
 import top.yukonga.scripta.editor.render.VisualRowIndex
+import top.yukonga.scripta.editor.render.ZoomMath
 import top.yukonga.scripta.editor.text.TextPosition
 import top.yukonga.scripta.editor.text.TextRange
 import kotlin.math.abs
-import kotlin.math.roundToInt
 import kotlin.time.Duration.Companion.milliseconds
 
 /** 超过此字符数的行走「网格」快路：不整行 shaping，只按可见列窗口等宽算术定位/绘制（M2，仅不换行）。 */
 private const val LONG_LINE_THRESHOLD = 2000
 
-/** 双指缩放字号量化档距（sp）：连续缩放落到此档才改字号，把逐事件重排压到过档才一次、消抖动（P3）。 */
-private const val ZOOM_STEP_SP = 0.5f
+/**
+ * 双指缩放提交的最小字号变化阈值（sp）：净变化小于此值视作未真正缩放、不重排。只是滤掉双指微动噪声（避免无谓重排
+ * 与非整字号漂移）；不吸附提交值——提交字号恒为精确的 `起始字号 × 连续系数`，与预览末帧完全连续、无提交跳变。
+ * （旧版曾量化到 0.5sp 档以压制「手势中逐档重排」；现只在松手重排一次、无此性能压力，量化已无必要且会引入提交吸附跳变。）
+ */
+private const val ZOOM_MIN_CHANGE_SP = 0.1f
+
+/** 双指缩放字号下限 / 上限（sp）。手势中连续缩放系数被夹到使字号落在此区间，提交后字号亦钳于此。 */
+private const val ZOOM_MIN_SP = 8f
+private const val ZOOM_MAX_SP = 40f
+
+/**
+ * 布局基准字号与派生量比例：行号字号 = 正文 × [NUMBER_FONT_SCALE]（默认 14sp→13sp）；横向内边距
+ * padX = 正文 / [LAYOUT_BASE_FONT_SP] × [PAD_X_BASE_DP]（默认 14sp→8dp）。**关键**：用「比例」而非「常量偏移 / 固定 dp」，
+ * 使 gutter 宽、内边距随字号线性缩放，整套布局在缩放下「自相似」——双指缩放预览（整体等比缩放）与松手重排（按新字号
+ * 重新布局）产生一致几何，行号/正文在提交时不跳变、无重绘（成熟编辑器效果）；不换行提交横向亦简化为精确的 sX'=k·sX。
+ */
+private const val LAYOUT_BASE_FONT_SP = 14f
+private const val NUMBER_FONT_SCALE = 13f / 14f
+private const val PAD_X_BASE_DP = 8f
+
+/**
+ * 底部可滚过文末的留白（视口高比例）。**暂设 0（关闭）**：它加进 maxScrollY 后，会与 IME 改变视口触发的 re-clamp 耦合——
+ * 底部编辑时弹键盘把 scrollY 推大，收键盘后视口复原、re-clamp 却把 scrollY 夹到「含留白」的上界，导致末行下方残留一块空白。
+ * 若要恢复底部留白，需改成「只在主动拖到最底部时可达、IME/缩放的自动夹回一律 settle 到自然底（末行贴底）」的双上界方案。
+ */
+private const val BOTTOM_SCROLL_PAD_FRACTION = 0f
 
 /**
  * layoutFor 逐行缓存条目。[validatedVersion] 记「上次确认与文档一致时的 buffer.version」：命中且版本相等即
@@ -119,12 +144,17 @@ fun CodeEditor(
     // 触边拉伸/回弹反馈（平台不支持时返回 null，自然退化为无）。
     val overscroll = rememberOverscrollEffect()
 
-    // 双指缩放调整的字号（sp）。行高、gutter、layout 随之联动重算。缩放手势把连续比例量化到 ZOOM_STEP_SP 一档，
-    // 只在过档时改一次（见下方缩放 pointerInput）——避免逐事件全链 remember 重建 + 整屏重 shaping 的连续抖动（P3）。
+    // 双指缩放调整的字号（sp）。行高、gutter、layout 随之联动重算。整个缩放手势里字号**不变**，松手才由
+    // commitZoom 换一次字号（见下方缩放 pointerInput）——手势期只动下面的 previewScale，零重排。
     var fontSizeSp by remember { mutableFloatStateOf(14f) }
-    // 换行下缩放的焦点还原：换行时折行非均匀、k 公式不精确会跳变，故记住手指下的文档字符 (line,col) 与其视口 y，
-    // 换字号重排后由 LaunchedEffect(fontSizeSp) 把它移回同一视口 y。非缩放/不换行时不用（不换行走 k 公式，精确）。
-    var zoomFocalPos by remember { mutableStateOf<TextPosition?>(null) }
+    // 手势期连续缩放系数（相对手势起始字号），**仅在 draw 阶段读**（传给 EditorCanvas/CursorOverlay 的 provider）：
+    // 每指针事件写它只使画布重绘、不触发重组/重排。恒 1f 表示非缩放态；松手 commitZoom 后归 1、换成真实字号。
+    var previewScale by remember { mutableFloatStateOf(1f) }
+    // 缩放焦点：起始双指中点，仅捕获一次。zoomFocalScreenX/zoomFocalViewportY 兼作预览两轴缩放轴心与不换行提交两轴锚（焦点
+    // 全程停在此视口 x/y）。换行下正文横向无滚动（横向轴心传 0、正文钉左）、纵向重排非均匀 → 提交改锚「预览末帧屏幕顶处的文档
+    // 字符」zoomWrapAnchorPos（在 commitZoom 里按预览变换算出、非手势起始），由 LaunchedEffect(fontSizeSp) 重排后放回视口顶。
+    var zoomWrapAnchorPos by remember { mutableStateOf<TextPosition?>(null) }
+    var zoomFocalScreenX by remember { mutableFloatStateOf(0f) }
     var zoomFocalViewportY by remember { mutableFloatStateOf(0f) }
     val lineHeightSp = fontSizeSp * 1.5f
     // trim = None 让 lineHeight 对「单行」也生效，否则默认 Trim.Both 会让单行退回字体自然高度，
@@ -148,14 +178,16 @@ fun CodeEditor(
         TextStyle(
             color = colors.gutterForeground,
             fontFamily = FontFamily.Monospace,
-            fontSize = (fontSizeSp - 1f).coerceAtLeast(6f).sp,
+            // 行号字号取正文的固定比例（而非 -1 常量偏移）：使 gutter 宽随字号线性缩放、布局自相似，缩放提交时行号不跳。
+            fontSize = (fontSizeSp * NUMBER_FONT_SCALE).coerceAtLeast(6f).sp,
             lineHeight = lineHeightSp.sp,
             lineHeightStyle = lineHeightStyle,
             platformStyle = platformTextStyle
         )
     }
     val lineHeightPx = with(density) { lineHeightSp.sp.toPx() }
-    val padXPx = with(density) { 8.dp.toPx() }
+    // padX 随字号成比例（默认 14sp→8dp），使内边距与 gutter 宽在缩放下自相似——预览等比缩放与松手重排几何一致、行号不跳。
+    val padXPx = with(density) { (PAD_X_BASE_DP * fontSizeSp / LAYOUT_BASE_FONT_SP).dp.toPx() }
     // 拖动手柄半径与命中外扩（细光标线太小，靠 slop 放大可抓区域）。
     val handleRadiusPx = with(density) { 8.dp.toPx() }
     val handleSlopPx = with(density) { 10.dp.toPx() }
@@ -277,7 +309,12 @@ fun CodeEditor(
     }
 
     val contentHeight = (if (softWrap) rowIndex.totalRows() else lineCount) * lineHeightPx
-    val maxScrollY = (contentHeight - viewportHeight).coerceAtLeast(0f)
+    // 底部留白（连续式）：允许滚过文末一段（末行可上移、下方留空，观感对齐成熟编辑器、不把末行钉死底边）。用
+    // `(内容高 − 视口高 + 留白).coerceAtLeast(0)` 而非「溢出才加」的分段——后者在「刚好放得下↔刚溢出」临界点会让
+    // maxScrollY 从 0 猛跳到留白值，令缩放到该临界字号时底部空间突变、松手跳一下；连续式使临界平滑、焦点滚动量落在
+    // 钳制范围内不被夹回。缩放预览纵向只钳顶部、不依赖此留白；缩放越界的底部由此 re-clamp 收拢。
+    val bottomScrollPadPx = viewportHeight * BOTTOM_SCROLL_PAD_FRACTION
+    val maxScrollY = (contentHeight - viewportHeight + bottomScrollPadPx).coerceAtLeast(0f)
     val maxScrollX = if (softWrap) 0f else (gutterWidthPx + padXPx * 2 + widestSeen[0] - viewportWidth).coerceAtLeast(0f)
 
     // 视口变大 / 内容变短使 maxScroll 缩小时，把滚动量夹回范围内。否则在文档底部弹出输入法（视口被 imePadding
@@ -288,18 +325,18 @@ fun CodeEditor(
         scrollX = scrollX.coerceIn(0f, maxScrollX)
     }
 
-    // 换行下缩放焦点还原：换字号触发本效应，在可见行按新字号重排后，把记住的焦点文档字符移回原视口 y。k 公式对
-    // 换行的非均匀折行不成立（大字号一档折行行数变化大 → 逐档跳变），故换行改用字符锚定 + post-layout 校正。声明
-    // 在 re-clamp 效应之后 → 同帧内 scrollY 以本效应为准。不换行 scrollY 已由缩放 pointerInput 的 k 公式当场设好。
+    // 换行下缩放的顶部锚定精确校正：字号现每手势只在 commitZoom 变一次 → 本效应每手势只触发一次。commitZoom 已同步置好近似
+    // scrollY（提交帧≈预览末帧）；本效应在可见行按新字号重排后，用新布局把「锚字符所在折行」精确放回视口顶 (y=0)——顶部稳定、
+    // 下方重排（比锚焦点字符可预测，焦点在长折行里的新位置难料、易 settle）。k 公式对换行非均匀折行不成立，故换行走「顶部字符
+    // 锚定 + post-layout 校正」。声明在 re-clamp 效应之后 → 同帧内 scrollY 以本效应为准。不换行 scrollY 已由 k 公式精确设好、不进本效应。
     LaunchedEffect(fontSizeSp) {
         if (!softWrap) return@LaunchedEffect
-        val fp = zoomFocalPos ?: return@LaunchedEffect
-        val layout = layoutFor(fp.line) ?: return@LaunchedEffect
-        val col = fp.column.coerceIn(0, engine.buffer.lineLength(fp.line))
-        val vr = layout.getLineForOffset(col) // 焦点字符所在的视觉行
-        val charCenterInLine = (layout.getLineTop(vr) + layout.getLineBottom(vr)) / 2f
-        val charContentY = lineTopPx(fp.line) + charCenterInLine // 焦点字符中心在内容坐标里的 y
-        scrollY = (charContentY - zoomFocalViewportY).coerceIn(0f, maxScrollY) // 令其回到原视口 y
+        val ap = zoomWrapAnchorPos ?: return@LaunchedEffect
+        val layout = layoutFor(ap.line) ?: return@LaunchedEffect
+        val col = ap.column.coerceIn(0, engine.buffer.lineLength(ap.line))
+        val vr = layout.getLineForOffset(col) // 锚字符所在视觉行（新字号 layout）
+        val anchorRowTopY = lineTopPx(ap.line) + layout.getLineTop(vr) // 该折行顶在内容坐标里的 y
+        scrollY = anchorRowTopY.coerceIn(0f, maxScrollY) // 令其回到视口顶 (screenY=0)
     }
 
     // 二维自由平移：跟手拖动时横纵可斜向同时滚（而非被锁在单轴——两个正交的单轴 scrollable 会在拖动起始按
@@ -476,6 +513,38 @@ fun CodeEditor(
     val liveMaxScrollY = rememberUpdatedState(maxScrollY)
     val liveMaxScrollX = rememberUpdatedState(maxScrollX)
 
+    // 松手提交缩放：把连续 previewScale 落成精确的真实字号，按模式一次性设好 scroll 锚定，触发唯一一次重排。
+    // 相对手势起始字号 fontStart 的比例 k = newFont/fontStart。不换行用两轴 k 公式（行高均匀、精确、全同步）；换行先置近似
+    // scrollY 使提交帧≈预览末帧，随后 LaunchedEffect(fontSizeSp) 用新布局把「顶部可见字符」精确放回视口顶（每手势一次）。
+    fun commitZoom(fontStart: Float, scale: Float) {
+        val newFont = ZoomMath.commitFontSize(fontStart, scale, ZOOM_MIN_SP, ZOOM_MAX_SP)
+        if (abs(newFont - fontStart) < ZOOM_MIN_CHANGE_SP) return // 变化过小（双指微动噪声）：视作未缩放、不重排
+        val k = newFont / fontStart
+        val fy = zoomFocalViewportY
+        if (softWrap) {
+            // 「起始行基于缩放时屏幕顶部可见行」：锚定预览末帧屏幕顶 (y=0) 处的文档字符，重排后放回顶部——顶部稳定、下方重排，
+            // 比锚焦点字符可预测（焦点在长折行里的新位置难料、易 settle）。预览屏幕顶对应的旧布局内容 y = scaledScrollTop/s
+            // （scaledScrollTop 为预览纵向钳制后的顶滚，与 previewVerticalTransform 同式）。
+            val scaledMax = (scale * contentHeight - viewportHeight + bottomScrollPadPx).coerceAtLeast(0f)
+            val scaledScrollTop = (scale * (scrollY + fy) - fy).coerceIn(0f, scaledMax)
+            val topContentYOld = scaledScrollTop / scale
+            zoomWrapAnchorPos = positionAtWithScroll(Offset(0f, 0f), topContentYOld, 0f) // 顶部左缘的文档字符
+            // 同步临时 scrollY：使提交帧≈预览末帧（顶部内容仍在 y=0 附近），随后效应按新布局精确置顶（anchorViewportY=0）。
+            scrollY = ZoomMath.provisionalScrollYWrap(topContentYOld, k, 0f)
+            scrollX = 0f // 换行下横向无滚动
+        } else {
+            // 锚基取当前显示的钳制值（下游只在 draw/命中处钳制、不回写），避免以溢出上界为锚导致反向缩放黏边。
+            val baseX = scrollX.coerceIn(0f, liveMaxScrollX.value)
+            val baseY = scrollY.coerceIn(0f, liveMaxScrollY.value)
+            val r = ZoomMath.commitScrollNoWrap(baseX, baseY, zoomFocalScreenX, fy, k)
+            scrollX = r[0]; scrollY = r[1]
+        }
+        fontSizeSp = newFont // 唯一一次重排在此
+    }
+    // 手势闭包 key=Unit、不随重组重启，会按值捕获闭包。用 rememberUpdatedState 让它每次调「当前帧」的 commitZoom
+    // （内含最新 softWrap / lineTopPx / layoutFor / liveMaxScroll），避开 stale-capture（与 positionAtLive 同理）。
+    val commitZoomLive = rememberUpdatedState<(Float, Float) -> Unit> { fontStart, scale -> commitZoom(fontStart, scale) }
+
     // 选区拖拽到视口上/下/左/右热区时，按帧持续纵横滚动并同步延伸选区；速度随进入热区的深度线性增大。
     // 词锚（长按选词）按词粒度扩展、字符锚（手柄端点）按字符扩展。
     LaunchedEffect(selectionDragActive) {
@@ -536,67 +605,72 @@ fun CodeEditor(
             .onSizeChanged { viewportWidth = it.width.toFloat(); viewportHeight = it.height.toFloat() }
             .scrollable2D(scroll2D, overscrollEffect = overscroll, interactionSource = scrollInteraction)
             .pointerInput(Unit) {
-                // 双指缩放调字号：仅在 ≥2 指时消费，单指留给滚动/选择。以双指焦点为锚——焦点下的文档位置在缩放后
-                // 仍停在焦点处。为消抖动，把连续缩放「量化到 [ZOOM_STEP_SP] 一档」：手势期间累积连续目标字号 accum，
-                // 仅当跨过档位使量化字号真变时才改 fontSizeSp（触发一次重排 + 焦点校正）——把每秒几十次全链重建/重
-                // shaping 压到「过档才一次」，档间零重排、无逐帧亚像素抖动。渲染模型不变，行号仍钉屏幕、无缩放伪影。
+                // 双指缩放 + 缩放后单指跟手平移（一个连续手势内完成，避免与 scrollable 交接跳变）。≥2 指时累积连续 previewScale
+                // （仅 draw 阶段读 → 零重组/零重排/零重测）并消费；松手一次 commitZoom 换字号 + 重排。提交后若仍剩一指，**本处理器**
+                // 继续按其位移 1:1 平移「已重排」的内容（并消费，scrollable 不再插手）——平移直接作用在提交后真实内容上、跟手、无跳。
+                // 平移不提供 fling（缩放后微调足矣）；抬手结束。纯单指（从未双指）不进任何分支、不消费 → 照常交 scrollable 滚动/惯性。
                 awaitEachGesture {
                     awaitFirstDown(requireUnconsumed = false)
-                    var accum = fontSizeSp // 连续目标字号（不量化）；跨档才落到 fontSizeSp
-                    var started = false
+                    var active = false // 已进入双指缩放
+                    var committed = false // 本轮已提交（其后剩余单指走跟手平移）
+                    var scaleAccum = 1f // 相对 fontStart 的连续缩放系数
+                    var fontStart = fontSizeSp // 手势起始字号
+                    var panLast = Offset.Unspecified // 提交后剩余单指的上一位置（跟手平移基准）
+                    var panActive = false // 跟手平移是否已越过 touchSlop（抬指残留微移 / 触屏 liftoff 抖动不算平移）
                     do {
                         val event = awaitPointerEvent()
-                        if (event.changes.count { it.pressed } >= 2) {
-                            if (!started) { started = true; accum = fontSizeSp } // 缩放起始：从当前字号起累积
+                        val pressed = event.changes.count { it.pressed }
+                        if (pressed >= 2) {
+                            panLast = Offset.Unspecified; panActive = false // 回到双指：清除单指平移基准与激活态
+                            if (!active) {
+                                // 缩放起始：捕获一次焦点（起始双指中点及其下的文档字符）。放开再合拢会以（可能已提交的）新 fontStart 重新起算。
+                                active = true; committed = false; fontStart = fontSizeSp; scaleAccum = 1f
+                                val c0 = event.calculateCentroid(useCurrent = true)
+                                if (c0 != Offset.Unspecified) {
+                                    zoomFocalScreenX = c0.x
+                                    zoomFocalViewportY = c0.y
+                                    // 换行提交的顶部锚字符不在此捕获——它取「预览末帧」屏幕顶处的位置，在 commitZoom 里按预览变换算出。
+                                }
+                            }
                             val zoom = event.calculateZoom()
                             if (zoom != 1f) {
-                                accum = (accum * zoom).coerceIn(8f, 40f)
-                                val old = fontSizeSp
-                                val next = (accum / ZOOM_STEP_SP).roundToInt() * ZOOM_STEP_SP
-                                if (next != old) {
-                                    val c = event.calculateCentroid(useCurrent = true)
-                                    if (softWrap) {
-                                        // 换行：记住焦点处文档字符与其视口 y，换字号后由上方 LaunchedEffect(fontSizeSp)
-                                        // 在重排完把它移回同一视口 y（横向 maxScrollX=0，无需处理）。
-                                        if (c != Offset.Unspecified) {
-                                            zoomFocalPos = positionAtLive.value(c) // 旧字号下手指下的文档字符
-                                            zoomFocalViewportY = c.y
-                                            // 同步先用 k 公式设一个近似 scrollY（以上一步已校正值为基、很接近）：否则换字号后本帧
-                                            // 仍读旧 scrollY + 新行高，firstVisibleLine 会指到早得多的行、渲染猛跳一帧（超长折行行尤甚），
-                                            // 下一帧 effect 才拉回 → 连续缩放持续闪跳。同步近似值让本帧就渲染在正确处，effect 只做微调。
-                                            val baseY = scrollY.coerceIn(0f, liveMaxScrollY.value)
-                                            scrollY = ((baseY + c.y) * (next / old) - c.y).coerceAtLeast(0f)
-                                        }
-                                        fontSizeSp = next
+                                scaleAccum *= zoom
+                                // 夹到字号落 [ZOOM_MIN_SP, ZOOM_MAX_SP]：撞界后不再变，使预览与最终字号一致。
+                                previewScale = ZoomMath.clampScaleToFontRange(scaleAccum, fontStart, ZOOM_MIN_SP, ZOOM_MAX_SP)
+                            }
+                            // 双指期**一律消费**（含 zoom==1f 的持距漂移帧）：否则这些未消费帧会落到外层 scrollable2D，令其起手拖动并攒下
+                            // fling 速度，非同时松手时在「被抬起手指」的 up 上甩出去 → 松手大跳变。
+                            event.changes.forEach { it.consume() }
+                        } else if (active && !committed) {
+                            // 掉到 <2 指：立即提交缩放，并以剩余单指为基准接管跟手平移（不交给 scrollable、避免交接跳变）。
+                            commitZoomLive.value(fontStart, previewScale); previewScale = 1f
+                            committed = true; active = false
+                            val p = event.changes.firstOrNull { it.pressed }
+                            panLast = p?.position ?: Offset.Unspecified
+                            // 连同「刚抬起」的那根手指一并消费：否则 scrollable2D 可能在其 up 上结束拖动并 fling → 松手大跳。
+                            event.changes.forEach { it.consume() }
+                        } else if (committed && pressed >= 1) {
+                            // 缩放后剩余单指继续滑动：越过 touchSlop 才算「跟手平移」，据位移 1:1 平移已重排内容（跟手、基于手指下真实内容）。
+                            // 未越 slop 前不动：滤掉「本想同时松手却一根先抬」时残留手指的微移 / 触屏 liftoff 抖动，避免误滚动跳变。全程消费防落 scrollable。
+                            val p = event.changes.firstOrNull { it.pressed }
+                            if (p != null) {
+                                if (panLast != Offset.Unspecified) {
+                                    val d = p.position - panLast
+                                    if (!panActive) {
+                                        // 距 commit 基准累积（未越 slop 前不更新 panLast）；越档后从当前位置起算、丢弃 slop 内位移。
+                                        if (d.getDistance() > viewConfiguration.touchSlop) { panActive = true; panLast = p.position }
                                     } else {
-                                        val k = next / old
-                                        // 锚基取「当前显示的钳制值」：下游只在 draw/命中处按 maxScroll 钳制、不回写 state，
-                                        // 直接以原始 scrollY/X 为锚会让其溢出上界并累积、反向缩放黏边。用 liveMaxScrollY/X 先钳回显示值。
-                                        val baseY = scrollY.coerceIn(0f, liveMaxScrollY.value)
-                                        val baseX = scrollX.coerceIn(0f, liveMaxScrollX.value)
-                                        fontSizeSp = next
-                                        if (c != Offset.Unspecified) {
-                                            // 令焦点处内容缩放后不动：newScroll = (base + focal) * k - focal。纵向无 gutter 项、恒精确。
-                                            scrollY = ((baseY + c.y) * k - c.y).coerceAtLeast(0f)
-                                            // 横向：焦点相对正文起点 = c.x - (gutter + padX)。gutter 宽随字号变（行号字号 = 字号-1），
-                                            // 故 base+focal 项用「旧宽 fxOld」、末项用「新宽 fxNew」，否则字号大变时横向漂移。新宽按行号字号
-                                            // 比例从 live 旧宽线性推得（等宽 advance ∝ 字号，亚像素误差可忽略），只用 live 值、无需重测。
-                                            val gutterOld = hitGutterWidth.value
-                                            val numFontOld = (old - 1f).coerceAtLeast(6f)
-                                            val numFontNew = (next - 1f).coerceAtLeast(6f)
-                                            val gutterNew = (gutterOld - padXPx * 2) * (numFontNew / numFontOld) + padXPx * 2
-                                            val fxOld = c.x - (gutterOld + padXPx)
-                                            val fxNew = c.x - (gutterNew + padXPx)
-                                            scrollX = ((baseX + fxOld) * k - fxNew).coerceAtLeast(0f)
-                                        } else {
-                                            scrollY = baseY * k
-                                        }
+                                        scrollX = (scrollX - d.x).coerceIn(0f, liveMaxScrollX.value)
+                                        scrollY = (scrollY - d.y).coerceIn(0f, liveMaxScrollY.value)
+                                        panLast = p.position
                                     }
-                                }
-                                event.changes.forEach { it.consume() } // 消费缩放事件，防止落到滚动
+                                } else panLast = p.position
+                                p.consume()
                             }
                         }
                     } while (event.changes.any { it.pressed })
+                    // 兜底（双指同时抬起 / 手势取消，未经上面的 <2 指分支）：仍未提交则提交一次。
+                    if (active && !committed) { commitZoomLive.value(fontStart, previewScale); previewScale = 1f }
                 }
             }
             .editorTextInput(engine, enabled = !readOnly)
@@ -801,7 +875,9 @@ fun CodeEditor(
             scrollY = { scrollY.coerceIn(0f, maxScrollY) },
             // 与 scrollY/scrollX 传参同源钳制：maxScroll 骤减那一帧（底部捏合放大 / 收起 IME），行锚与像素
             // 偏移都读钳制后的 scrollY，二者恒定锚同一窗口，不再顶部留一帧空白（re-clamp effect 下一帧才生效）。
-            firstVisibleLine = { (lineAtPx(scrollY.coerceIn(0f, maxScrollY)) - 3).coerceAtLeast(0) },
+            // 入参 extraTopPx 为缩放预览的可见带上界（预缩放屏幕 y）：非缩放时为 0（等同原状），缩小时为负、
+            // 令起始行前移、补齐外扩露出的行。
+            firstVisibleLine = { extraTopPx -> (lineAtPx(scrollY.coerceIn(0f, maxScrollY) + extraTopPx) - 3).coerceAtLeast(0) },
             lineTopPx = ::lineTopPx,
             refBaselinePx = refBaselinePx,
             caretHandleVisible = { caretHandleVisible && !readOnly },
@@ -812,6 +888,16 @@ fun CodeEditor(
             gridRefBaseline = gridRefBaseline,
             gridRefCursorTop = gridRefCursor.top,
             gridRefCursorBottom = gridRefCursor.bottom,
+            // 缩放预览：手势期连续系数与两轴焦点（draw 阶段读）。恒 1f/未缩放时画布逐像素等价原状。换行下正文横向无滚动，
+            // 横向焦点传 0 → 正文钉左（gutter 恒钉左）；不换行传起始焦点屏幕 x → 正文横向绕焦点缩放（左侧正文滑到 gutter 后）。
+            // 内容尺寸 + 留白供预览四方向钳制，与 maxScrollY/maxScrollX **同一连续式** → 预览即最终态、松手不跳（图片缩放模型）。
+            previewScale = { previewScale },
+            previewFocalX = { if (softWrap) 0f else zoomFocalScreenX },
+            previewFocalY = { zoomFocalViewportY },
+            contentHeightPx = { contentHeight },
+            bottomPaddingPx = bottomScrollPadPx,
+            contentWidthPx = { gutterWidthPx + padXPx * 2 + widestSeen[0] },
+            rightPaddingPx = 0f,
             modifier = Modifier.fillMaxSize(),
         )
         // 光标独立图层：叠在正文之上，blink 只切本层 alpha、不重放正文画布（P10）。
@@ -831,6 +917,7 @@ fun CodeEditor(
             gridRefCursorBottom = gridRefCursor.bottom,
             gutterWidthPx = gutterWidthPx,
             padXPx = padXPx,
+            previewScale = { previewScale }, // 缩放预览期不画光标（正文在缩放、光标会脱节）
             modifier = Modifier.fillMaxSize(),
         )
     }
