@@ -701,7 +701,9 @@ fun CodeEditor(
             lineNumberMode = lineNumberMode,
             scrollX = { scrollX.coerceIn(0f, maxScrollX) },
             scrollY = { scrollY.coerceIn(0f, maxScrollY) },
-            firstVisibleLine = { (lineAtPx(scrollY) - 3).coerceAtLeast(0) },
+            // 与 scrollY/scrollX 传参同源钳制：maxScroll 骤减那一帧（底部捏合放大 / 收起 IME），行锚与像素
+            // 偏移都读钳制后的 scrollY，二者恒定锚同一窗口，不再顶部留一帧空白（re-clamp effect 下一帧才生效）。
+            firstVisibleLine = { (lineAtPx(scrollY.coerceIn(0f, maxScrollY)) - 3).coerceAtLeast(0) },
             lineTopPx = ::lineTopPx,
             refBaselinePx = refBaselinePx,
             caretVisible = { !readOnly && blink },
