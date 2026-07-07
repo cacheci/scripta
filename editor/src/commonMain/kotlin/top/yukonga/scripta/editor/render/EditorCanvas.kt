@@ -102,6 +102,10 @@ fun EditorCanvas(
         // 正文横向变换：绕焦点缩放、左右都钳到 [0, s·内容宽 − 视口宽 + 右侧留白]（与 maxScrollX 同式）。焦点左侧正文左移滑到
         // gutter 后/移出、到右缘钳住；换行由上层传 focalX=0 → 钉左。预览即最终态 → 松手不跳。
         val hTranslateText = ZoomMath.previewHorizontalTranslate(sX, previewFocalX(), s, size.width, contentWidthPx(), rightPaddingPx)
+        // 当前行整行高亮的预缩放矩形：经横向变换 screenX=s·px+hTranslateText 后仍铺满视口宽 [0, size.width]——否则缩小(s<1)时
+        // 直接用 size.width 会被 s 缩窄、右侧铺不满（「高亮不到底」）。s==1 时 hlLeft=0、hlWidth=size.width，与原状一致。
+        val hlLeft = -hTranslateText / s
+        val hlWidth = size.width / s
         val bufVersion = engine.buffer.version // 网格切片缓存键用；编辑变更即让旧切片失效
         val pinnedToScreen = lineNumberMode == LineNumberMode.PinnedToScreen
         // gutter 与行号的横向偏移：固定于屏幕钉在左侧（0）；固定于行随内容横移（sX），gutter 底色条连同行号
@@ -138,7 +142,7 @@ fun EditorCanvas(
                         val lineLen = engine.buffer.lineLength(line)
                         val textTop = top + (refBaselinePx - gridRefBaseline)
                         if (sel.isEmpty && sel.start.line == line) {
-                            drawRect(colors.gutterBackground, topLeft = Offset(0f, top), size = Size(size.width, h))
+                            drawRect(colors.gutterBackground, topLeft = Offset(hlLeft, top), size = Size(hlWidth, h))
                         }
                         if (!sel.isEmpty && line >= sel.start.line && line <= sel.end.line) {
                             val cS = if (line == sel.start.line) sel.start.column else 0
@@ -181,7 +185,7 @@ fun EditorCanvas(
                     // 当前行淡色高亮（无选择时）：铺满整行宽（含 gutter 区）。固定模式下左段会被文末 gutter 条盖住、
                     // 视觉不变；跟随模式下 gutter 条随内容滚走，整行仍均匀高亮、左侧不留缺口。
                     if (sel.isEmpty && sel.start.line == line) {
-                        drawRect(colors.gutterBackground, topLeft = Offset(0f, top), size = Size(size.width, h))
+                        drawRect(colors.gutterBackground, topLeft = Offset(hlLeft, top), size = Size(hlWidth, h))
                     }
                     // 选择覆盖层（跨视觉行的 path）
                     if (!sel.isEmpty && line >= sel.start.line && line <= sel.end.line) {
