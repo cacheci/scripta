@@ -64,8 +64,7 @@ class TextBufferTest {
 
     @Test
     fun textIsCachedUntilEdited() {
-        // 大文件下 IME（getExtractedText）会反复调 text()；未编辑时必须复用同一构建结果，
-        // 否则每次弹/收输入法都重建整篇 O(n)（3MB 卡顿的根因）。
+        // 小文档未编辑时复用同一构建结果，省 getText / 相等比较等低频路径的 O(n) 重建。
         val b = TextBuffer("a\nb\nc")
         val first = b.text()
         assertEquals("a\nb\nc", first)
@@ -78,6 +77,16 @@ class TextBufferTest {
 
         b.setText("hello") // setText 同样失效
         assertEquals("hello", b.text())
+    }
+
+    @Test
+    fun largeTextNotCachedToAvoidResidentCopy() {
+        // 超过缓存上限的大文档不常驻整篇：每次 text() 重建，避免多留一份 N（IME 已窗口化、不再高频拉全篇）。
+        val big = "a".repeat(1_100_000) // > CACHE_TEXT_LIMIT (1_000_000)
+        val b = TextBuffer(big)
+        val first = b.text()
+        assertEquals(big.length, first.length)
+        assertNotSame(first, b.text()) // 未缓存：两次不同实例
     }
 
     @Test

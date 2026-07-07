@@ -4,6 +4,9 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 
+/** 整篇缓存的字符数上限：超过则不常驻缓存，避免大文件多留一份 N 常驻。 */
+private const val CACHE_TEXT_LIMIT = 1_000_000
+
 /**
  * 行链表文档模型：一整篇被拆成一行一个 StringBuilder。按行寻址，编辑只动受影响的行，
  * 因此渲染/编辑不随文档大小退化。offset↔(行,列) 的换算不在这里，交给 LineOffsetIndex。
@@ -18,8 +21,9 @@ class TextBuffer(initialText: String = "") {
     var version: Int by mutableStateOf(0)
         private set
 
-    // 整篇拼接结果缓存：未编辑时复用，避免 IME（getExtractedText）反复拉取时每次 O(n) 重建整篇
-    // （大文件下弹/收输入法卡顿的根因）。任何改动都置空，见 replace/setText。
+    // 整篇拼接结果缓存：未编辑的小文档复用，省 getText / 相等比较等低频路径的 O(n) 重建。超过 CACHE_TEXT_LIMIT
+    // 的大文档不缓存——那只是一份多余的 N 常驻（IME 的 getExtractedText 已窗口化、不再反复拉全篇）。任何改动
+    // 都置空，见 replace/setText。
     private var cachedText: String? = null
 
     val lineCount: Int get() = lines.size
@@ -55,7 +59,9 @@ class TextBuffer(initialText: String = "") {
             sb.append(lines[i])
             if (i != lines.size - 1) sb.append('\n')
         }
-        return sb.toString().also { cachedText = it }
+        val whole = sb.toString()
+        if (whole.length <= CACHE_TEXT_LIMIT) cachedText = whole
+        return whole
     }
 
     /** 用 [replacement] 替换 [range]；返回插入文本末尾的光标位置。 */
@@ -93,8 +99,8 @@ class TextBuffer(initialText: String = "") {
         val normalized = if (text.indexOf('\r') >= 0) text.replace("\r\n", "\n").replace("\r", "\n") else text
         lines.clear()
         lines.addAll(splitToLines(normalized))
-        // 规整后的整篇即 text() 的输出，直接预热缓存——连加载后首次 getText 的 O(n) 重建都省掉。
-        cachedText = normalized
+        // 规整后的整篇即 text() 的输出：小文档预热缓存（省首次 getText 重建）；大文档不缓存、避免多留一份 N。
+        cachedText = if (normalized.length <= CACHE_TEXT_LIMIT) normalized else null
         version++
     }
 
