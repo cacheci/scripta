@@ -45,7 +45,7 @@ data class EditorColors(
             gutterForeground = Color(0xFF858585),
             cursor = Color(0xFFAEAFAD),
             selection = Color(0x553A6DA0),
-            handle = Color(0xFF4C9EEB),
+            handle = Color(0xFF277AF7),
         )
     }
 }
