@@ -182,8 +182,11 @@ fun CodeEditor(
     val textAreaWidthPx = (viewportWidth - gutterWidthPx - padXPx * 2).coerceAtLeast(1f)
     val widthBucket = if (softWrap) textAreaWidthPx.toInt() else 0
 
-    // 视觉行索引：仅换行模式使用；行数/宽度/模式/字号变化即重建（未测量的行按 1 行估算）。
-    val rowIndex = remember(softWrap, widthBucket, lineCount, fontSizeSp) { VisualRowIndex(lineCount) }
+    // 视觉行索引：仅换行模式使用。不换行模式 lineTopPx/lineAtPx 走平凡公式、从不读它，故固定大小 1、不随
+    // 行数重建——否则默认的不换行模式下每次回车/删行都白建两个 IntArray(n) + O(n) buildTree 再丢弃。换行模式
+    // 仍按 (行数/宽度/字号) 重建（未测量的行按 1 行估算）；跨编辑增量维护待引擎暴露编辑 delta 后再做。
+    val rowIndexSize = if (softWrap) lineCount else 1
+    val rowIndex = remember(softWrap, widthBucket, rowIndexSize, fontSizeSp) { VisualRowIndex(rowIndexSize) }
 
     // 逐行 layout 缓存：只在宽度/模式/字号变化时整表失效，不再以 version 失效——否则每敲一个字符整表丢弃、
     // 可见行全部重测。失效改由下方按行内容比对精确处理（内容变了才重测；插入/删除行的下标平移也会因内容
