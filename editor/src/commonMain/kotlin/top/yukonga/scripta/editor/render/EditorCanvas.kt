@@ -8,6 +8,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.TextLayoutResult
@@ -117,6 +118,12 @@ fun EditorCanvas(
     // key 含文档版本（编辑即失效），列窗口量化到 32 列 → 窗口内滚动/闪烁/拖选帧全命中，横滚每 32 列才重测一次。
     // textStyle 变化（字号/配色）整表失效。有界 LRU：网格行同屏通常个位数，256 足够。
     val gridSliceCache = remember(textStyle) { LruCache<GridSliceKey, TextLayoutResult>(256) }
+    // 泪滴手柄路径按 kind 预建缓存（尖端在原点、body 沿方向悬挂）：只依赖 handleRadiusPx（固定 dp），绘制时每帧只 translate
+    // 到光标底 + drawPath，免去逐帧新建 Path + acos/atan2 + arcTo 弧线细分（drawHandle 每帧对每个可见手柄都画一次）。
+    val diag = 0.70710677f
+    val caretTeardrop = remember(handleRadiusPx) { buildTeardropPath(0f, 0f, 0f, 1f, handleRadiusPx, handleRadiusPx * 1.4f) }
+    val startTeardrop = remember(handleRadiusPx) { buildTeardropPath(0f, 0f, -diag, diag, handleRadiusPx, handleRadiusPx * 1.4f) }
+    val endTeardrop = remember(handleRadiusPx) { buildTeardropPath(0f, 0f, diag, diag, handleRadiusPx, handleRadiusPx * 1.4f) }
     Canvas(modifier) {
         // 在 draw 阶段读取滚动量：滚动只触发本画布重绘，不再让上层每滚 1px 重组。
         val sX = scrollX()
@@ -295,14 +302,13 @@ fun EditorCanvas(
                     caretLeft = textX + cr.left
                     crBottomY = base + cr.bottom
                 }
-                // 尖端在光标底 (caretLeft, crBottomY)；body 圆按 kind 朝外下方悬挂：光标↓、选区起点↙、选区终点↘。
-                val diag = 0.70710677f
-                val (ux, uy) = when (kind) {
-                    HandleKind.Caret -> 0f to 1f
-                    HandleKind.SelectionStart -> -diag to diag
-                    HandleKind.SelectionEnd -> diag to diag
+                // 按 kind 取预建泪滴（尖端在原点、body 朝外下方悬挂：光标↓、起点↙、终点↘），translate 到光标底后 drawPath。
+                val path = when (kind) {
+                    HandleKind.Caret -> caretTeardrop
+                    HandleKind.SelectionStart -> startTeardrop
+                    HandleKind.SelectionEnd -> endTeardrop
                 }
-                drawPath(buildTeardropPath(caretLeft, crBottomY, ux, uy, handleRadiusPx, handleRadiusPx * 1.4f), colors.handle)
+                translate(caretLeft, crBottomY) { drawPath(path, colors.handle) }
             }
             if (s == 1f) {
                 if (!sel.isEmpty) {
