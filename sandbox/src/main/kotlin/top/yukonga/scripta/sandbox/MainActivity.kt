@@ -339,4 +339,11 @@ private val SAMPLE_YAML = """
       中文: 输入测试(拼音 composing)
       emoji: "🇭🇰 🇯🇵 🇺🇸 😀 👨‍👩‍👧"
       long_line: 这是一行非常非常非常长的文本用来测试横向滚动与自动换行 aaaaaaaa bbbbbbbb cccccccc dddddddd eeeeeeee ffffffff gggggggg hhhhhhhh iiiiiiii jjjjjjjj
-""".trimIndent()
+""".trimIndent() + "\n" + longLineSample() + "\ntail:\n  a: 1\n  b: 2\n  c: 3\n"
+
+/** M2 超长行（网格虚拟化）测试用的一条 ~3500 字符单行，纯占位、不含真实数据（模拟压缩/生成代码的单行）。
+ *  尾部再接几行普通内容（见上），让网格行位于文档中部，便于交互测试（点按/选词/光标随动）。 */
+private fun longLineSample(): String {
+    val body = (0 until 250).joinToString(" ") { "tok$it=val$it" }
+    return "minified_one_liner: \"$body\""
+}
