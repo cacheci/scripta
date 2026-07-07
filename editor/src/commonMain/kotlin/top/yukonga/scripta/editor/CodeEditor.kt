@@ -163,10 +163,11 @@ fun CodeEditor(
         measurer.measure("0".repeat(gutterDigits), numberStyle).size.width + padXPx * 2
     }
 
-    var scrollY by remember { mutableStateOf(0f) }
-    var scrollX by remember { mutableStateOf(0f) }
-    var viewportWidth by remember { mutableStateOf(0f) }
-    var viewportHeight by remember { mutableStateOf(0f) }
+    // 每帧高频写读的量用 primitive FloatState，避免装箱 Float（滚动/拖拽每帧几个装箱分配纯属浪费）。
+    var scrollY by remember { mutableFloatStateOf(0f) }
+    var scrollX by remember { mutableFloatStateOf(0f) }
+    var viewportWidth by remember { mutableFloatStateOf(0f) }
+    var viewportHeight by remember { mutableFloatStateOf(0f) }
 
     // 换行模式下正文可用宽度（测量宽度约束）。
     val textAreaWidthPx = (viewportWidth - gutterWidthPx - padXPx * 2).coerceAtLeast(1f)
