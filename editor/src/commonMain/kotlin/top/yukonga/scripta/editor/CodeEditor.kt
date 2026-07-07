@@ -53,6 +53,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.LineHeightStyle
+import androidx.compose.ui.text.style.TextMotion
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -171,6 +172,9 @@ fun CodeEditor(
             fontSize = fontSizeSp.sp,
             lineHeight = lineHeightSp.sp,
             lineHeightStyle = lineHeightStyle,
+            // 线性字体度量 + 亚像素定位（去 hinting/网格拟合）：字形在不同字号间严格等比 → 双指缩放「缩放旧字形(预览)」与
+            // 「原生新字形(提交)」逐像素一致，消除松手时的亚像素左右吸附。代价：静态小字号略软（高 DPI 上可接受）。
+            textMotion = TextMotion.Animated,
             platformStyle = platformTextStyle
         )
     }
@@ -182,6 +186,7 @@ fun CodeEditor(
             fontSize = (fontSizeSp * NUMBER_FONT_SCALE).coerceAtLeast(6f).sp,
             lineHeight = lineHeightSp.sp,
             lineHeightStyle = lineHeightStyle,
+            textMotion = TextMotion.Animated, // 同正文：线性度量 + 亚像素，行号缩放时也不抖
             platformStyle = platformTextStyle
         )
     }
