@@ -243,6 +243,14 @@ fun CodeEditor(
     val maxScrollY = (contentHeight - viewportHeight).coerceAtLeast(0f)
     val maxScrollX = if (softWrap) 0f else (gutterWidthPx + padXPx * 2 + widestSeen[0] - viewportWidth).coerceAtLeast(0f)
 
+    // 视口变大 / 内容变短使 maxScroll 缩小时，把滚动量夹回范围内。否则在文档底部弹出输入法（视口被 imePadding
+    // 压小、scrollY 被 keep-in-view 推大）后收起输入法，视口复原、maxScrollY 骤减，而 scrollY 残留旧大值：
+    // firstVisibleLine 读未夹的 scrollY 会指到更靠下的行，绘制偏移却读已夹的 scrollY，二者错位 → 上方留空白。
+    LaunchedEffect(maxScrollY, maxScrollX) {
+        scrollY = scrollY.coerceIn(0f, maxScrollY)
+        scrollX = scrollX.coerceIn(0f, maxScrollX)
+    }
+
     // 二维自由平移：跟手拖动时横纵可斜向同时滚（而非被锁在单轴——两个正交的单轴 scrollable 会在拖动起始按
     // 方向锁定其一）；但松手 fling 惯性时锁到主导轴（垂直或水平），避免斜向漂移。用独立 interactionSource 追踪
     // 「是否正在拖动」：DragInteraction 期间为跟手，其后由 fling 驱动的回调即惯性阶段。holder 用普通数组（非
