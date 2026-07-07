@@ -1,5 +1,7 @@
 package top.yukonga.scripta.editor.render
 
+import kotlin.math.roundToInt
+
 /** 手柄种类：光标 / 选区起点 / 选区终点。 */
 enum class HandleKind { Caret, SelectionStart, SelectionEnd }
 
@@ -37,6 +39,32 @@ object EditorGeometry {
         if (lineHeight <= 0f || lineCount <= 0) return 0
         return ((y + scrollY) / lineHeight).toInt().coerceIn(0, lineCount - 1)
     }
+
+    // --- 超长「网格行」的等宽算术（M2：不换行下只切可见列窗口，避免 shaping 整行）---
+
+    /**
+     * 网格行的可见列窗口 [c0, c1]（含 [marginCols] 余量）：只测量/绘制这段，避免整行 shaping。
+     * [scrollX] 横向滚动量、[textAreaWidth] 正文可用宽度、[charW] 等宽字符宽、[lineLength] 该行字符数。
+     */
+    fun gridVisibleColumns(
+        scrollX: Float,
+        textAreaWidth: Float,
+        charW: Float,
+        lineLength: Int,
+        marginCols: Int = 8,
+    ): IntRange {
+        if (charW <= 0f || lineLength <= 0) return 0..0
+        val c0 = (scrollX / charW).toInt() - marginCols
+        val c1 = ((scrollX + textAreaWidth) / charW).toInt() + marginCols + 1
+        return c0.coerceIn(0, lineLength)..c1.coerceIn(0, lineLength)
+    }
+
+    /** 网格行：列 → 行内 x 像素（等宽）。 */
+    fun gridColumnToX(col: Int, charW: Float): Float = col * charW
+
+    /** 网格行：行内 x 像素 → 列（就近取列边界，钳制到行长）。 */
+    fun gridXToColumn(localX: Float, charW: Float, lineLength: Int): Int =
+        if (charW <= 0f) 0 else (localX / charW).roundToInt().coerceIn(0, lineLength)
 
     /**
      * softWrap 下按视觉行上下移动的落点。[curRow] 是光标当前所在视觉行（行内 0 基），[dir] 为 -1 上 / +1 下。

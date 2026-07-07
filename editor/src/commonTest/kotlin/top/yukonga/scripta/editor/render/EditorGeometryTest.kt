@@ -90,4 +90,36 @@ class EditorGeometryTest {
     fun visualDownAtDocumentEndReturnsNull() {
         assertEquals(null, target(2, 1, +1)) // 末行末视觉行再下 -> 不动
     }
+
+    // --- M2: 网格行等宽算术 ---
+
+    @Test
+    fun gridVisibleColumnsWindowsAroundScroll() {
+        // charW=10, 视口正文宽 100 -> 约 10 列可见；margin=2
+        val r = EditorGeometry.gridVisibleColumns(scrollX = 300f, textAreaWidth = 100f, charW = 10f, lineLength = 1000, marginCols = 2)
+        assertEquals(28, r.first)  // 300/10 - 2
+        assertEquals(43, r.last)   // 400/10 + 2 + 1
+    }
+
+    @Test
+    fun gridVisibleColumnsClampToLineBounds() {
+        val r = EditorGeometry.gridVisibleColumns(scrollX = 0f, textAreaWidth = 100f, charW = 10f, lineLength = 5, marginCols = 2)
+        assertEquals(0, r.first)   // -2 -> 0
+        assertEquals(5, r.last)    // 13 -> 5（行长）
+    }
+
+    @Test
+    fun gridVisibleColumnsDegenerateCharW() {
+        val r = EditorGeometry.gridVisibleColumns(0f, 100f, 0f, 1000, 2)
+        assertEquals(0, r.first); assertEquals(0, r.last) // charW=0 兜底
+    }
+
+    @Test
+    fun gridColumnXRoundTrip() {
+        assertEquals(50f, EditorGeometry.gridColumnToX(5, 10f))
+        assertEquals(5, EditorGeometry.gridXToColumn(52f, 10f, 100)) // round(5.2)
+        assertEquals(6, EditorGeometry.gridXToColumn(56f, 10f, 100)) // round(5.6)
+        assertEquals(100, EditorGeometry.gridXToColumn(9999f, 10f, 100)) // 钳制上界
+        assertEquals(0, EditorGeometry.gridXToColumn(-5f, 10f, 100))     // 钳制下界
+    }
 }
