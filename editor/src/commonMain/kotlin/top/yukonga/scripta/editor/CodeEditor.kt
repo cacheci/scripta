@@ -188,11 +188,13 @@ fun CodeEditor(
     val textAreaWidthPx = (viewportWidth - gutterWidthPx - padXPx * 2).coerceAtLeast(1f)
     val widthBucket = if (softWrap) textAreaWidthPx.toInt() else 0
 
-    // 视觉行索引：仅换行模式使用。不换行模式 lineTopPx/lineAtPx 走平凡公式、从不读它，故固定大小 1、不随
-    // 行数重建——否则默认的不换行模式下每次回车/删行都白建两个 IntArray(n) + O(n) buildTree 再丢弃。换行模式
-    // 仍按 (行数/宽度/字号) 重建（未测量的行按 1 行估算）；跨编辑增量维护待引擎暴露编辑 delta 后再做。
+    // 视觉行索引：仅换行模式使用。不换行模式 lineTopPx/lineAtPx 走平凡公式、从不读它，故固定大小 1、不随行数重建。
+    // 换行模式按 (行数/宽度) 重建，但**不以字号为 key**——否则双指缩放每过一档就 O(n) 重建 IntArray(n)+buildTree，
+    // 超大 softWrap 文件缩放会剧烈掉帧。字号变时保留本索引：可见行经 layoutFor 在新字号下重测并 setRows 增量更新
+    // （O(log n)/行、有界），视口外行暂留旧字号行数作估算、滚动时自然收敛——即「换行下缩放不逐帧全量重折、只增量」。
+    // 行数变化（回车）仍整表重建，待引擎暴露编辑 delta 后做增量 splice（M5）。
     val rowIndexSize = if (softWrap) lineCount else 1
-    val rowIndex = remember(softWrap, widthBucket, rowIndexSize, fontSizeSp) { VisualRowIndex(rowIndexSize) }
+    val rowIndex = remember(softWrap, widthBucket, rowIndexSize) { VisualRowIndex(rowIndexSize) }
 
     // 逐行 layout 缓存：只在宽度/模式/字号变化时整表失效，不再以 version 失效——否则每敲一个字符整表丢弃、
     // 可见行全部重测。失效改由下方按行内容比对精确处理（内容变了才重测；插入/删除行的下标平移也会因内容
