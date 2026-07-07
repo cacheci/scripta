@@ -5,7 +5,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.TextLayoutResult
@@ -18,12 +20,41 @@ import top.yukonga.scripta.editor.LineNumberMode
 import top.yukonga.scripta.editor.LruCache
 import top.yukonga.scripta.editor.text.TextPosition
 import top.yukonga.scripta.editor.text.TextRange
+import kotlin.math.PI
+import kotlin.math.acos
+import kotlin.math.atan2
+import kotlin.math.cos
+import kotlin.math.sin
 
 /** 网格行可见列切片缓存的键：行 + 量化后的列窗口 [start,end) + 文档版本（编辑即失效）。 */
 private data class GridSliceKey(val line: Int, val start: Int, val end: Int, val version: Int)
 
 /** 网格行切片列窗口量化粒度：窗口左右对齐到 32 列倍数，横滚每 32 列才换一次 key、其余帧命中缓存。 */
 private const val GRID_SLICE_QUANTUM = 32
+
+/**
+ * 泪滴手柄路径：尖端 ([tipX],[tipY]) 贴光标底，body 圆（半径 [r]）沿单位向量 ([ux],[uy]) 从尖端向外下方悬挂，
+ * 尖端到圆心距 [l]（须 > r，越大越尖）。两侧为「尖端到圆的切线」、外缘为圆的大弧，合成有尖角的水滴形。
+ * 光标手柄尖朝正上、选区起点尖朝右上（body 左下）、终点尖朝左上（body 右下），即成熟编辑器的镜像对。
+ */
+private fun buildTeardropPath(tipX: Float, tipY: Float, ux: Float, uy: Float, r: Float, l: Float): Path {
+    val cx = tipX + l * ux
+    val cy = tipY + l * uy
+    val gamma = acos((r / l).toDouble().coerceIn(-1.0, 1.0)) // 圆心处的半张角（切线与圆心-尖端连线夹角）
+    val phi = atan2((tipY - cy).toDouble(), (tipX - cx).toDouble()) // 圆心 → 尖端 方向（rad）
+    val t1 = phi + gamma // 一侧切点的圆心角
+    val t1x = (cx + r * cos(t1)).toFloat()
+    val t1y = (cy + r * sin(t1)).toFloat()
+    val rad2deg = 180.0 / PI
+    val bounds = Rect(cx - r, cy - r, cx + r, cy + r)
+    return Path().apply {
+        moveTo(tipX, tipY)
+        lineTo(t1x, t1y)
+        // 从 t1 切点起，扫过「背向尖端」的大弧 (2π − 2γ) 到另一切点，close 收回尖端 → 实心水滴。
+        arcTo(bounds, (t1 * rad2deg).toFloat(), ((2 * PI - 2 * gamma) * rad2deg).toFloat(), forceMoveTo = false)
+        close()
+    }
+}
 
 /**
  * 只绘制可见行的画布。从 [firstVisibleLine] 向下按 [lineTopPx] 走，直到超出视口。行高取自各行 layout
@@ -246,30 +277,32 @@ fun EditorCanvas(
 
             // 光标不在此画：拆到独立的 [CursorOverlay] 图层，闪烁只切该层 alpha、不重放整块正文画布（见 P10）。
 
-            // 拖动手柄（泪滴）：短柄接光标底、圆点作抓取区。选区两端常驻，光标手柄按 caretHandleVisible 控制。
+            // 拖动手柄（泪滴）：尖端贴光标底、body 圆朝外下方悬挂作抓取区。选区两端常驻，光标手柄按 caretHandleVisible 控制。
             // 网格行用等宽算术定光标矩形，其余走该行 layout。缩放预览期（s != 1f）隐藏——避免手柄随内容缩放显得突兀，
-            // 松手提交后按新布局重新出现，位置正确。
+            // 松手提交后按新布局重新出现，位置正确。命中盒仍由 EditorGeometry.handleGeometry（上层命中侧）给出、覆盖此泪滴。
             fun drawHandle(kind: HandleKind, pos: TextPosition) {
                 val caretLeft: Float
-                val crTopY: Float
                 val crBottomY: Float
                 if (isGridLine(pos.line)) {
                     val col = pos.column.coerceIn(0, engine.buffer.lineLength(pos.line))
                     val base = lineTopPx(pos.line) - sY + (refBaselinePx - gridRefBaseline)
                     caretLeft = textX + col * charW
-                    crTopY = base + gridRefCursorTop
                     crBottomY = base + gridRefCursorBottom
                 } else {
                     val layout = layoutFor(pos.line) ?: return
                     val cr = layout.getCursorRect(pos.column.coerceIn(0, engine.buffer.lineLength(pos.line)))
                     val base = lineTopPx(pos.line) - sY + (refBaselinePx - layout.firstBaseline)
                     caretLeft = textX + cr.left
-                    crTopY = base + cr.top
                     crBottomY = base + cr.bottom
                 }
-                val g = EditorGeometry.handleGeometry(kind, caretLeft, crTopY, crBottomY, handleRadiusPx, 0f)
-                drawLine(colors.handle, Offset(caretLeft, crBottomY), Offset(g.centerX, g.centerY - handleRadiusPx), strokeWidth = 2f)
-                drawCircle(colors.handle, radius = handleRadiusPx, center = Offset(g.centerX, g.centerY))
+                // 尖端在光标底 (caretLeft, crBottomY)；body 圆按 kind 朝外下方悬挂：光标↓、选区起点↙、选区终点↘。
+                val diag = 0.70710677f
+                val (ux, uy) = when (kind) {
+                    HandleKind.Caret -> 0f to 1f
+                    HandleKind.SelectionStart -> -diag to diag
+                    HandleKind.SelectionEnd -> diag to diag
+                }
+                drawPath(buildTeardropPath(caretLeft, crBottomY, ux, uy, handleRadiusPx, handleRadiusPx * 1.4f), colors.handle)
             }
             if (s == 1f) {
                 if (!sel.isEmpty) {
