@@ -3,6 +3,7 @@ plugins {
     alias(libs.plugins.composeCompiler)
 }
 
+@Suppress("UnstableApiUsage")
 android {
     namespace = "top.yukonga.scripta"
     compileSdk {
@@ -19,8 +20,25 @@ android {
     }
     buildTypes {
         release {
-            isMinifyEnabled = false
+            optimization.enable = true
+            vcsInfo.include = false
         }
+    }
+    dependenciesInfo {
+        includeInApk = false
+        includeInBundle = false
+    }
+    packaging {
+        jniLibs {
+            excludes += "lib/*/libandroidx.graphics.path.so"
+        }
+    }
+}
+
+androidComponents {
+    onVariants(selector().withBuildType("release")) {
+        it.packaging.resources.excludes
+            .add("**")
     }
 }
 
