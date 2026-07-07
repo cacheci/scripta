@@ -97,7 +97,7 @@ fun EditorCanvas(
                     val lineLen = engine.buffer.lineLength(line)
                     val textTop = top + (refBaselinePx - gridRefBaseline)
                     if (sel.isEmpty && sel.start.line == line) {
-                        drawRect(colors.gutterBackground, topLeft = Offset(gutterWidthPx, top), size = Size(size.width - gutterWidthPx, h))
+                        drawRect(colors.gutterBackground, topLeft = Offset(0f, top), size = Size(size.width, h))
                     }
                     if (!sel.isEmpty && line >= sel.start.line && line <= sel.end.line) {
                         val cS = if (line == sel.start.line) sel.start.column else 0
@@ -130,9 +130,10 @@ fun EditorCanvas(
             val h = layout.size.height.toFloat()
             val textTop = top + (refBaselinePx - layout.firstBaseline) // 基线对齐后的绘制顶
             if (top + h > 0f) {
-                // 当前行淡色高亮（无选择时）——按槽位（非文本）绘制
+                // 当前行淡色高亮（无选择时）：铺满整行宽（含 gutter 区）。固定模式下左段会被文末 gutter 条盖住、
+                // 视觉不变；跟随模式下 gutter 条随内容滚走，整行仍均匀高亮、左侧不留缺口。
                 if (sel.isEmpty && sel.start.line == line) {
-                    drawRect(colors.gutterBackground, topLeft = Offset(gutterWidthPx, top), size = Size(size.width - gutterWidthPx, h))
+                    drawRect(colors.gutterBackground, topLeft = Offset(0f, top), size = Size(size.width, h))
                 }
                 // 选择覆盖层（跨视觉行的 path）
                 if (!sel.isEmpty && line >= sel.start.line && line <= sel.end.line) {
