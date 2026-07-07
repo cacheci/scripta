@@ -587,9 +587,23 @@ fun CodeEditor(
             val maxY = liveMaxScrollY.value
             val maxX = liveMaxScrollX.value
             val stepY = edgeAutoScrollSpeed(pos.y, viewportHeight, lineHeightPx)
-            val stepX = edgeAutoScrollSpeed(pos.x, viewportWidth, lineHeightPx)
+            var stepX = edgeAutoScrollSpeed(pos.x, viewportWidth, lineHeightPx)
+            // 横向自动滚只在延伸端还能沿**当前行**推进时才进行：到行尾（右）/行首（左）即停，不把视口滚进该行文本外的空白
+            // （当前行短而上下有更长行时，全局 maxScrollX>0 会误让其滚进空白、延伸端却被钳在行尾不动）。与光标手柄版同一道闸。
+            // 并 gate maxX>0：maxX==0（softWrap 或无横向余量）时归零 stepX 也改不动 newX，跳过、免每帧 positionAtWithScroll/layoutFor。
+            if (stepX != 0f && maxX > 0f) {
+                val cur = positionAtWithScroll(pos, scrollY, scrollX)
+                val lineLen = engine.buffer.lineLength(cur.line)
+                if ((stepX > 0f && cur.column >= lineLen) || (stepX < 0f && cur.column <= 0)) stepX = 0f
+            }
             val newY = if (stepY != 0f && maxY > 0f) (scrollY + stepY).coerceIn(0f, maxY) else scrollY
-            val newX = if (stepX != 0f && maxX > 0f) (scrollX + stepX).coerceIn(0f, maxX) else scrollX
+            var newX = if (stepX != 0f && maxX > 0f) (scrollX + stepX).coerceIn(0f, maxX) else scrollX
+            // 拖拽期即时露出：延伸端被短行钳到当前不可见处时，立刻横滚把它拉回可见带（不等松手）。在 edge-step 之后再夹，
+            // 故与之不打架——长行推边时端点就在指下、在带内、revealScrollXFor 原样返回；仅短行钳出屏外才真正横滚。
+            if (!softWrap && maxX > 0f) {
+                val c = positionAtWithScroll(pos, newY, newX)
+                caretContentXOf(c.line, c.column)?.let { newX = revealScrollXFor(it, newX) }
+            }
             if (newY != scrollY || newX != scrollX) {
                 scrollY = newY
                 scrollX = newX
@@ -928,17 +942,24 @@ fun CodeEditor(
                         pingCaretHandle() // 抬手后重置 4s 计时
                     } else {
                         val a = anchor!!
-                        selectionAnchor = a
-                        selectionWordAnchor = null // 端点拖拽走字符级锚
-                        selectionDragPos = p
-                        selectionDragActive = true
-                        engine.setSelection(a, mapped(p))
-                        drag(down.id) { change ->
-                            selectionDragPos = change.position
-                            engine.setSelection(a, mapped(change.position)); change.consume()
+                        // 与光标手柄同理：越过 touchSlop 才算拖拽端点、激活延伸 + 边缘自动滚动；纯点按端点手柄（不过 slop）
+                        // 保持选区原样、不滚动——否则端点手柄本就靠边时，一按到边缘热区就被选区 effect 当成「停在边缘」带着滚。
+                        val slop = awaitTouchSlopOrCancellation(down.id) { c, _ -> c.consume() }
+                        if (slop != null) {
+                            selectionAnchor = a
+                            selectionWordAnchor = null // 端点拖拽走字符级锚
+                            // selectionDragPos 存已含 grabDy 的目标点（与 mapped/setSelection 同源）：否则边缘自动滚动 effect 会按
+                            // 手柄泪滴（在光标下方约 1.5 行）所在行做「按行闸停」，落到下方短行 → 误判行尾、横向不滚。与光标手柄一致。
+                            selectionDragPos = Offset(slop.position.x, slop.position.y + grabDy)
+                            selectionDragActive = true
+                            engine.setSelection(a, mapped(slop.position))
+                            drag(down.id) { change ->
+                                selectionDragPos = Offset(change.position.x, change.position.y + grabDy)
+                                engine.setSelection(a, mapped(change.position)); change.consume()
+                            }
+                            selectionDragPos = null
+                            selectionDragActive = false
                         }
-                        selectionDragPos = null
-                        selectionDragActive = false
                     }
                 }
             }
