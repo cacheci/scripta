@@ -21,6 +21,9 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import top.yukonga.scripta.editor.EditorEngine
 
+/** getExtractedText 返回的光标上下文窗口半径（字符）：够 IME 联想/上下文用，又不随文档大小 O(n)。 */
+private const val EXTRACT_WINDOW = 2048
+
 /** 自管 IME 的 InputConnection：BaseInputConnection 子类，全部文本操作转发到 EditorEngine。 */
 internal class EditorInputConnection(
     view: View,
@@ -68,12 +71,20 @@ internal class EditorInputConnection(
     }
 
     override fun getExtractedText(request: ExtractedTextRequest?, flags: Int): ExtractedText {
-        val (s, e) = engine.selectionOffsets()
+        // 只返回光标周围的有界窗口，不再 getText() 拼全篇——大文件下那正是 OOM 来源。已设 IME_FLAG_NO_EXTRACT_UI，
+        // 主流输入法几乎不走提取式全文编辑；偏移相对窗口换算，selection 仍准确。partialStartOffset=-1 表示 text
+        // 即 [startOffset, startOffset+len) 的完整内容（非增量）。
+        val before = engine.textBeforeCursor(EXTRACT_WINDOW).toString()
+        val selected = engine.selectedText() ?: ""
+        val after = engine.textAfterCursor(EXTRACT_WINDOW).toString()
+        val (s, _) = engine.selectionOffsets()
         return ExtractedText().apply {
-            text = engine.getText() // 已设 IME_FLAG_NO_EXTRACT_UI，极少被调；大文件下为已知限制。
-            startOffset = 0
-            selectionStart = s
-            selectionEnd = e
+            text = before + selected + after
+            startOffset = s - before.length
+            partialStartOffset = -1
+            partialEndOffset = -1
+            selectionStart = before.length
+            selectionEnd = before.length + selected.length
         }
     }
 
