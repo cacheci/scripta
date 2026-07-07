@@ -12,13 +12,18 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.drawText
 import top.yukonga.scripta.editor.EditorColors
 import top.yukonga.scripta.editor.EditorEngine
+import top.yukonga.scripta.editor.LineNumberMode
 import top.yukonga.scripta.editor.LruCache
 import top.yukonga.scripta.editor.text.TextPosition
 import top.yukonga.scripta.editor.text.TextRange
 
 /**
  * 只绘制可见行的画布。从 [firstVisibleLine] 向下按 [lineTopPx] 走，直到超出视口。行高取自各行 layout
- * （换行模式下一行可占多视觉行），因此对换行/不换行统一处理。gutter 固定不随横向滚动。
+ * （换行模式下一行可占多视觉行），因此对换行/不换行统一处理。
+ *
+ * 行号横向锚定见 [lineNumberMode]：正文/光标/手柄画完后统一铺不透明 gutter 条 + 行号，滚进来的正文透不进
+ * 行号区。[LineNumberMode.PinnedToScreen] 的 gutter/行号钉屏幕左侧；[LineNumberMode.PinnedToLine] 的 gutter/
+ * 行号随内容横移、滚到右侧一并从左边滑出。
  *
  * 每行文字/光标/选区/预编辑都按 `refBaselinePx - layout.firstBaseline` 做基线平移，使所有行（中/英/混排）
  * 的基线落在同一水平线，抵消 CJK/拉丁字体度量差导致的整行基线偏移。
@@ -36,6 +41,7 @@ fun EditorCanvas(
     lineHeightPx: Float,
     gutterWidthPx: Float,
     padXPx: Float,
+    lineNumberMode: LineNumberMode,
     scrollX: () -> Float,
     scrollY: () -> Float,
     firstVisibleLine: () -> Int,
@@ -60,18 +66,23 @@ fun EditorCanvas(
         // 在 draw 阶段读取滚动量：滚动只触发本画布重绘，不再让上层每滚 1px 重组。
         val sX = scrollX()
         val sY = scrollY()
+        val pinnedToScreen = lineNumberMode == LineNumberMode.PinnedToScreen
+        // gutter 与行号的横向偏移：固定于屏幕钉在左侧（0）；固定于行随内容横移（sX），gutter 底色条连同行号
+        // 一起向左滑出。两种模式都有区别于正文区的 gutter 底色（[colors.gutterBackground]）。
+        val gutterScroll = if (pinnedToScreen) 0f else sX
         drawRect(colors.background, topLeft = Offset.Zero, size = size)
-        drawRect(colors.gutterBackground, topLeft = Offset.Zero, size = Size(gutterWidthPx, size.height))
+        // gutter 不透明条 + 行号统一延后到正文/光标/手柄之后重绘（见文末），盖住横向滚进来的正文、保证数字清晰。
 
         val sel = engine.selection
         val comp = engine.composing
         val textX = gutterWidthPx + padXPx - sX
         val lineCount = engine.buffer.lineCount
 
+        // 逐行只收集可见行/顶，待正文画完后统一盖 gutter 条 + 行号（否则滚进来的正文会糊住数字）。
+        val deferredNumbers = ArrayList<Pair<Int, Float>>()
+
         fun drawLineNumber(line: Int, top: Float) {
-            val num = numberLayoutCache.getOrPut(line) { textMeasurer.measure((line + 1).toString(), numberStyle) }
-            val numTop = top + (refBaselinePx - num.firstBaseline)
-            drawText(num, color = colors.gutterForeground, topLeft = Offset(gutterWidthPx - padXPx - num.size.width, numTop))
+            deferredNumbers.add(line to top)
         }
 
         var line = firstVisibleLine().coerceIn(0, (lineCount - 1).coerceAtLeast(0))
@@ -227,6 +238,16 @@ fun EditorCanvas(
             drawHandle(HandleKind.SelectionEnd, sel.end)
         } else if (caretHandleVisible()) {
             drawHandle(HandleKind.Caret, sel.start)
+        }
+
+        // 正文/光标/手柄全部画完后，铺一条不透明 gutter（固定模式钉屏幕左侧、跟随模式随 sX 左移）盖住横向滚
+        // 进来的正文，再在其上画行号——保证任意横向滚动下数字清晰、且 gutter 底色始终区别于正文区（这也是
+        // 「降低透明度」要解决的可读性问题）。
+        drawRect(colors.gutterBackground, topLeft = Offset(-gutterScroll, 0f), size = Size(gutterWidthPx, size.height))
+        for ((line, top) in deferredNumbers) {
+            val num = numberLayoutCache.getOrPut(line) { textMeasurer.measure((line + 1).toString(), numberStyle) }
+            val numTop = top + (refBaselinePx - num.firstBaseline)
+            drawText(num, color = colors.gutterForeground, topLeft = Offset(gutterWidthPx - padXPx - num.size.width - gutterScroll, numTop))
         }
     }
 }

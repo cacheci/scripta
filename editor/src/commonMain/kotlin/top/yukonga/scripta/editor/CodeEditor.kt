@@ -89,6 +89,7 @@ fun CodeEditor(
     colors: EditorColors = EditorColors.Default,
     readOnly: Boolean = false,
     softWrap: Boolean = false,
+    lineNumberMode: LineNumberMode = LineNumberMode.PinnedToScreen,
 ) {
     val engine = controller.engine
     LaunchedEffect(initialText) { controller.setText(initialText) }
@@ -696,6 +697,7 @@ fun CodeEditor(
             lineHeightPx = lineHeightPx,
             gutterWidthPx = gutterWidthPx,
             padXPx = padXPx,
+            lineNumberMode = lineNumberMode,
             scrollX = { scrollX.coerceIn(0f, maxScrollX) },
             scrollY = { scrollY.coerceIn(0f, maxScrollY) },
             firstVisibleLine = { (lineAtPx(scrollY) - 3).coerceAtLeast(0) },

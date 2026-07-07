@@ -9,6 +9,21 @@ enum class EditorLanguage {
     Yaml,
 }
 
+/**
+ * 行号的横向锚定方式。
+ *
+ * [PinnedToScreen]：行号钉在屏幕左侧，不随横向滚动移动；正文之后重绘不透明 gutter 条盖住滚进来的内容，
+ * 保证任意横向滚动下数字都清晰。
+ *
+ * [PinnedToLine]：行号连同其 gutter 底色属于该行坐标系，随内容一起横向滚动——滚到右侧时一并从左边滑出屏幕。
+ *
+ * 两种模式共用同一 gutter 宽度与正文原点，切换不引起文本重排，命中/滚动几何一致。
+ */
+enum class LineNumberMode {
+    PinnedToScreen,
+    PinnedToLine,
+}
+
 /** Colors used by the editor surface. Kept flat and [Immutable] so it stays a stable Compose input. */
 @Immutable
 data class EditorColors(

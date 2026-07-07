@@ -39,6 +39,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import top.yukonga.scripta.editor.CodeEditor
 import top.yukonga.scripta.editor.EditorLanguage
+import top.yukonga.scripta.editor.LineNumberMode
 import top.yukonga.scripta.editor.rememberCodeEditorController
 import java.io.IOException
 
@@ -55,6 +56,7 @@ class MainActivity : ComponentActivity() {
             var language by remember { mutableStateOf(EditorLanguage.Yaml) }
             var wrap by remember { mutableStateOf(false) }
             var readOnly by remember { mutableStateOf(false) }
+            var lineNumberMode by remember { mutableStateOf(LineNumberMode.PinnedToScreen) }
             var openedName by remember { mutableStateOf<String?>(null) }
             var big by remember { mutableStateOf(false) } // false=默认示例，true=3MB 配置
             val bigConfig = remember { bigYaml(20_000) }   // 生成一次，来回切换时复用
@@ -132,6 +134,17 @@ class MainActivity : ComponentActivity() {
                         style = TextStyle(color = Color(0xFFE0A458), fontSize = 13.sp),
                         modifier = Modifier.clickable { readOnly = !readOnly },
                     )
+                    BasicText(
+                        text = if (lineNumberMode == LineNumberMode.PinnedToScreen) "  行号: 固定  " else "  行号: 跟随  ",
+                        style = TextStyle(color = Color(0xFFB39DDB), fontSize = 13.sp),
+                        modifier = Modifier.clickable {
+                            lineNumberMode = if (lineNumberMode == LineNumberMode.PinnedToScreen) {
+                                LineNumberMode.PinnedToLine
+                            } else {
+                                LineNumberMode.PinnedToScreen
+                            }
+                        },
+                    )
                     // 已打开的文件名占满剩余宽度、单行省略，绝不把上面的按钮挤出屏幕。
                     openedName?.let {
                         BasicText(
@@ -152,6 +165,7 @@ class MainActivity : ComponentActivity() {
                     language = language,
                     softWrap = wrap,
                     readOnly = readOnly,
+                    lineNumberMode = lineNumberMode,
                     // 让开底部导航栏，再让开键盘；imePadding 消费在导航栏之后，底部取二者较大值（关键盘=导航栏、开键盘=键盘）。
                     modifier = Modifier
                         .fillMaxWidth()
