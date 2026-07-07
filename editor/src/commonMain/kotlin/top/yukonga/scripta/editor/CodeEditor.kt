@@ -180,6 +180,7 @@ fun CodeEditor(
     val layoutCache = remember(softWrap, widthBucket, fontSizeSp) { LruCache<Int, Pair<String, TextLayoutResult>>(4096) }
     fun layoutFor(line: Int): TextLayoutResult? {
         if (line < 0 || line >= engine.buffer.lineCount) return null
+        if (isGridLine(line)) return null // 网格行不整行测量：绘制走可见列切片（EditorCanvas），几何走等宽算术
         val content = engine.buffer.lineText(line)
         layoutCache[line]?.let {
             if (it.first == content) {
@@ -694,6 +695,11 @@ fun CodeEditor(
             caretHandleVisible = { caretHandleVisible && !readOnly },
             handleRadiusPx = handleRadiusPx,
             layoutFor = ::layoutFor,
+            charW = charWpx,
+            isGridLine = ::isGridLine,
+            gridRefBaseline = gridRefBaseline,
+            gridRefCursorTop = gridRefCursor.top,
+            gridRefCursorBottom = gridRefCursor.bottom,
             modifier = Modifier.fillMaxSize(),
         )
     }

@@ -14,6 +14,7 @@ import top.yukonga.scripta.editor.EditorColors
 import top.yukonga.scripta.editor.EditorEngine
 import top.yukonga.scripta.editor.LruCache
 import top.yukonga.scripta.editor.text.TextPosition
+import top.yukonga.scripta.editor.text.TextRange
 
 /**
  * 只绘制可见行的画布。从 [firstVisibleLine] 向下按 [lineTopPx] 走，直到超出视口。行高取自各行 layout
@@ -21,6 +22,9 @@ import top.yukonga.scripta.editor.text.TextPosition
  *
  * 每行文字/光标/选区/预编辑都按 `refBaselinePx - layout.firstBaseline` 做基线平移，使所有行（中/英/混排）
  * 的基线落在同一水平线，抵消 CJK/拉丁字体度量差导致的整行基线偏移。
+ *
+ * 超长「网格行」（[isGridLine] 为真）不整行 shaping：只测量/绘制落在视口内的可见列窗口切片，几何（光标/
+ * 选区/手柄）用等宽算术（[charW] + 参考字符垂直度量 [gridRefBaseline]/[gridRefCursorTop]/[gridRefCursorBottom]）。
  */
 @Composable
 fun EditorCanvas(
@@ -41,6 +45,11 @@ fun EditorCanvas(
     caretHandleVisible: () -> Boolean,
     handleRadiusPx: Float,
     layoutFor: (Int) -> TextLayoutResult?,
+    charW: Float,
+    isGridLine: (Int) -> Boolean,
+    gridRefBaseline: Float,
+    gridRefCursorTop: Float,
+    gridRefCursorBottom: Float,
     modifier: Modifier = Modifier,
 ) {
     // 行号 layout 缓存：行号只依赖行下标与 numberStyle，draw 里逐帧重测会击穿 TextMeasurer 仅 8 条的
@@ -59,10 +68,50 @@ fun EditorCanvas(
         val textX = gutterWidthPx + padXPx - sX
         val lineCount = engine.buffer.lineCount
 
+        fun drawLineNumber(line: Int, top: Float) {
+            val num = numberLayoutCache.getOrPut(line) { textMeasurer.measure((line + 1).toString(), numberStyle) }
+            val numTop = top + (refBaselinePx - num.firstBaseline)
+            drawText(num, color = colors.gutterForeground, topLeft = Offset(gutterWidthPx - padXPx - num.size.width, numTop))
+        }
+
         var line = firstVisibleLine().coerceIn(0, (lineCount - 1).coerceAtLeast(0))
         while (line < lineCount) {
             val top = lineTopPx(line) - sY
             if (top >= size.height) break
+
+            if (isGridLine(line)) {
+                // 超长网格行：只测量/绘制可见列窗口，几何用等宽算术（单视觉行，行高 = lineHeightPx）。
+                val h = lineHeightPx
+                if (top + h > 0f) {
+                    val lineLen = engine.buffer.lineLength(line)
+                    val textTop = top + (refBaselinePx - gridRefBaseline)
+                    if (sel.isEmpty && sel.start.line == line) {
+                        drawRect(colors.gutterBackground, topLeft = Offset(gutterWidthPx, top), size = Size(size.width - gutterWidthPx, h))
+                    }
+                    if (!sel.isEmpty && line >= sel.start.line && line <= sel.end.line) {
+                        val cS = if (line == sel.start.line) sel.start.column else 0
+                        val cE = if (line == sel.end.line) sel.end.column else lineLen
+                        if (cE > cS) {
+                            drawRect(colors.selection, topLeft = Offset(textX + cS * charW, top), size = Size((cE - cS) * charW, h))
+                        }
+                        if (line != sel.end.line) {
+                            drawRect(colors.selection, topLeft = Offset(textX + lineLen * charW, top), size = Size(lineHeightPx * 0.4f, h))
+                        }
+                    }
+                    // 正文：只切落在视口内的列窗口测量，避免 shaping 整行
+                    val textAreaWidth = (size.width - gutterWidthPx - padXPx * 2).coerceAtLeast(1f)
+                    val cols = EditorGeometry.gridVisibleColumns(sX, textAreaWidth, charW, lineLen)
+                    if (cols.last > cols.first) {
+                        val slice = engine.buffer.textInRange(TextRange(TextPosition(line, cols.first), TextPosition(line, cols.last)))
+                        val sliceLayout = textMeasurer.measure(slice, textStyle, softWrap = false)
+                        drawText(sliceLayout, color = colors.foreground, topLeft = Offset(textX + cols.first * charW, textTop))
+                    }
+                    drawLineNumber(line, top)
+                }
+                line++
+                continue
+            }
+
             val layout = layoutFor(line)
             if (layout == null) {
                 line++; continue
@@ -96,24 +145,32 @@ fun EditorCanvas(
                 // 正文（含换行后的多视觉行）
                 drawText(layout, color = colors.foreground, topLeft = Offset(textX, textTop))
                 // 行号（基线对齐到正文基线）；命中缓存则跳过重测（LRU 自动淘汰，无需手动清空）
-                val num = numberLayoutCache.getOrPut(line) { textMeasurer.measure((line + 1).toString(), numberStyle) }
-                val numTop = top + (refBaselinePx - num.firstBaseline)
-                drawText(num, color = colors.gutterForeground, topLeft = Offset(gutterWidthPx - padXPx - num.size.width, numTop))
+                drawLineNumber(line, top)
             }
             line++
         }
 
         // 预编辑下划线
         comp?.let { c ->
-            val layout = layoutFor(c.start.line)
-            if (layout != null) {
-                val textTop = lineTopPx(c.start.line) - sY + (refBaselinePx - layout.firstBaseline)
-                val len = engine.buffer.lineLength(c.start.line)
-                val startRect = layout.getCursorRect(c.start.column.coerceIn(0, len))
-                val endRect = layout.getCursorRect(c.end.column.coerceIn(0, len))
-                if (startRect.top == endRect.top) { // 同一视觉行
-                    val y = textTop + startRect.bottom - 2f
-                    drawLine(colors.cursor, Offset(textX + startRect.left, y), Offset(textX + endRect.left, y), strokeWidth = 3f)
+            val cLine = c.start.line
+            if (isGridLine(cLine)) {
+                val textTop = lineTopPx(cLine) - sY + (refBaselinePx - gridRefBaseline)
+                val len = engine.buffer.lineLength(cLine)
+                val xS = textX + c.start.column.coerceIn(0, len) * charW
+                val xE = textX + c.end.column.coerceIn(0, len) * charW
+                val y = textTop + gridRefCursorBottom - 2f
+                drawLine(colors.cursor, Offset(xS, y), Offset(xE, y), strokeWidth = 3f)
+            } else {
+                val layout = layoutFor(cLine)
+                if (layout != null) {
+                    val textTop = lineTopPx(cLine) - sY + (refBaselinePx - layout.firstBaseline)
+                    val len = engine.buffer.lineLength(cLine)
+                    val startRect = layout.getCursorRect(c.start.column.coerceIn(0, len))
+                    val endRect = layout.getCursorRect(c.end.column.coerceIn(0, len))
+                    if (startRect.top == endRect.top) { // 同一视觉行
+                        val y = textTop + startRect.bottom - 2f
+                        drawLine(colors.cursor, Offset(textX + startRect.left, y), Offset(textX + endRect.left, y), strokeWidth = 3f)
+                    }
                 }
             }
         }
@@ -121,28 +178,48 @@ fun EditorCanvas(
         // 光标（无选择、闪烁可见时）。caretVisible 在 draw 里读取 blink，使闪烁只触发本画布重绘、
         // 不再让 CodeEditor 与本可组合每 500ms 整体重组。
         if (sel.isEmpty && caretVisible()) {
-            val layout = layoutFor(sel.start.line)
-            if (layout != null) {
-                val textTop = lineTopPx(sel.start.line) - sY + (refBaselinePx - layout.firstBaseline)
-                val cr = layout.getCursorRect(sel.start.column.coerceIn(0, engine.buffer.lineLength(sel.start.line)))
-                drawLine(
-                    colors.cursor,
-                    Offset(textX + cr.left, textTop + cr.top + 1f),
-                    Offset(textX + cr.left, textTop + cr.bottom - 1f),
-                    strokeWidth = 2.5f
-                )
+            val cLine = sel.start.line
+            if (isGridLine(cLine)) {
+                val textTop = lineTopPx(cLine) - sY + (refBaselinePx - gridRefBaseline)
+                val x = textX + sel.start.column.coerceIn(0, engine.buffer.lineLength(cLine)) * charW
+                drawLine(colors.cursor, Offset(x, textTop + gridRefCursorTop + 1f), Offset(x, textTop + gridRefCursorBottom - 1f), strokeWidth = 2.5f)
+            } else {
+                val layout = layoutFor(cLine)
+                if (layout != null) {
+                    val textTop = lineTopPx(cLine) - sY + (refBaselinePx - layout.firstBaseline)
+                    val cr = layout.getCursorRect(sel.start.column.coerceIn(0, engine.buffer.lineLength(cLine)))
+                    drawLine(
+                        colors.cursor,
+                        Offset(textX + cr.left, textTop + cr.top + 1f),
+                        Offset(textX + cr.left, textTop + cr.bottom - 1f),
+                        strokeWidth = 2.5f
+                    )
+                }
             }
         }
 
         // 拖动手柄（泪滴）：短柄接光标底、圆点作抓取区。选区两端常驻，光标手柄按 caretHandleVisible 控制。
+        // 网格行用等宽算术定光标矩形，其余走该行 layout。
         fun drawHandle(kind: HandleKind, pos: TextPosition) {
-            val layout = layoutFor(pos.line) ?: return
-            val cr = layout.getCursorRect(pos.column.coerceIn(0, engine.buffer.lineLength(pos.line)))
-            val base = lineTopPx(pos.line) - sY + (refBaselinePx - layout.firstBaseline)
-            val caretLeft = textX + cr.left
-            val caretBottom = base + cr.bottom
-            val g = EditorGeometry.handleGeometry(kind, caretLeft, base + cr.top, caretBottom, handleRadiusPx, 0f)
-            drawLine(colors.handle, Offset(caretLeft, caretBottom), Offset(g.centerX, g.centerY - handleRadiusPx), strokeWidth = 2f)
+            val caretLeft: Float
+            val crTopY: Float
+            val crBottomY: Float
+            if (isGridLine(pos.line)) {
+                val col = pos.column.coerceIn(0, engine.buffer.lineLength(pos.line))
+                val base = lineTopPx(pos.line) - sY + (refBaselinePx - gridRefBaseline)
+                caretLeft = textX + col * charW
+                crTopY = base + gridRefCursorTop
+                crBottomY = base + gridRefCursorBottom
+            } else {
+                val layout = layoutFor(pos.line) ?: return
+                val cr = layout.getCursorRect(pos.column.coerceIn(0, engine.buffer.lineLength(pos.line)))
+                val base = lineTopPx(pos.line) - sY + (refBaselinePx - layout.firstBaseline)
+                caretLeft = textX + cr.left
+                crTopY = base + cr.top
+                crBottomY = base + cr.bottom
+            }
+            val g = EditorGeometry.handleGeometry(kind, caretLeft, crTopY, crBottomY, handleRadiusPx, 0f)
+            drawLine(colors.handle, Offset(caretLeft, crBottomY), Offset(g.centerX, g.centerY - handleRadiusPx), strokeWidth = 2f)
             drawCircle(colors.handle, radius = handleRadiusPx, center = Offset(g.centerX, g.centerY))
         }
         if (!sel.isEmpty) {
