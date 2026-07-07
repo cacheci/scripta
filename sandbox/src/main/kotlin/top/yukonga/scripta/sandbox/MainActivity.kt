@@ -71,8 +71,15 @@ class MainActivity : ComponentActivity() {
                         // 文件可达数 MB，读取与文件名查询都放 IO 线程，别卡住 UI；回到主线程再写 state。
                         val (name, content) = withContext(Dispatchers.IO) {
                             val display = queryDisplayName(context, uri)
+                            // 打开前查大小、超上限直接拒绝：整篇仍需入内存，超堆容量必 OOM，不如给明确提示。
+                            val size = queryFileSize(context, uri)
+                            if (size > MAX_OPEN_BYTES) {
+                                throw IOException("文件过大（${size / 1024 / 1024}MB），上限 ${MAX_OPEN_BYTES / 1024 / 1024}MB")
+                            }
+                            // readBytes().decodeToString() 峰值 ≈ byte[] + String（~2N）；优于 readText 的
+                            // StringWriter/StringBuffer 反复 copyOf 扩容（~3N，正是打开大文件 OOM 的那一下）。
                             val body = context.contentResolver.openInputStream(uri)
-                                ?.bufferedReader()?.use { it.readText() }
+                                ?.use { it.readBytes().decodeToString() }
                                 ?: throw IOException("无法读取文件")
                             display to body
                         }
@@ -157,11 +164,20 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+/** 打开外部文件的字节上限：整篇仍需入内存，超堆容量必 OOM，超此值直接拒绝并提示。 */
+private const val MAX_OPEN_BYTES = 32L * 1024 * 1024
+
 /** 查询 SAF 文档的显示名，用于语言判定与工具栏展示；查不到返回 null。 */
 private fun queryDisplayName(context: Context, uri: Uri): String? =
     context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
         if (c.moveToFirst()) c.getString(0) else null
     }
+
+/** 查询 SAF 文档字节大小，用于打开前的上限校验；查不到返回 -1（跳过校验）。 */
+private fun queryFileSize(context: Context, uri: Uri): Long =
+    context.contentResolver.query(uri, arrayOf(OpenableColumns.SIZE), null, null, null)?.use { c ->
+        if (c.moveToFirst() && !c.isNull(0)) c.getLong(0) else -1L
+    } ?: -1L
 
 /** 按扩展名判定语言：.yaml/.yml 走 YAML 高亮，其余按纯文本（避免把 .json/.kt 误高亮成 YAML）。 */
 private fun languageForName(name: String?): EditorLanguage {

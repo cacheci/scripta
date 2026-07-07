@@ -89,7 +89,8 @@ class TextBuffer(initialText: String = "") {
     }
 
     fun setText(text: String) {
-        val normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+        // 无 CR 的常见情况不复制整篇（String.replace 无匹配也会新建，大文件加载时是一份多余的 N 峰值）。
+        val normalized = if (text.indexOf('\r') >= 0) text.replace("\r\n", "\n").replace("\r", "\n") else text
         lines.clear()
         lines.addAll(splitToLines(normalized))
         // 规整后的整篇即 text() 的输出，直接预热缓存——连加载后首次 getText 的 O(n) 重建都省掉。
