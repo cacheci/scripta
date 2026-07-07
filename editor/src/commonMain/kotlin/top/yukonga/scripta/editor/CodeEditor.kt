@@ -460,32 +460,39 @@ fun CodeEditor(
         }
     }
 
-    // keep-in-view：光标随选区/视口变化滚动露出。用 snapshotFlow 观察 (selection, viewport)，不把 selection
-    // 当组合期 effect key（P1）；Triple 在选区或视口任一变化时 emit（覆盖原 key 集），emit 频率为「每次变化」
-    // 而非逐帧，IME 动画期也只是逐帧 emit、无协程 cancel/relaunch。
+    // keep-in-view 的露出逻辑。几何量（lineHeightPx/lineTopPx/layoutFor/caretContentXOf/revealScrollXFor/softWrap）随字号每帧
+    // 重算，但下方 LaunchedEffect(Unit) 的协程只在挂载时启动一次，会**永久捕获挂载帧（14sp）的几何**（stale-capture）：缩放后
+    // 它按旧 14sp 几何算 caretTop、却比实时（新字号尺度）scrollY，两坐标系差「挂载/当前 字号比」→ 纯点击把已可见光标误判越界、
+    // 滚一大段（跳位 ∝ 字号比；默认 14sp 时比=1、无跳）。故用 rememberUpdatedState 把整段提到「当前帧」，collect 里调 .value()
+    // 用最新字号几何——与 positionAtLive/caretRectLive/liveMaxScroll 同法（本项目到处规避此坑，唯独这里漏了）。
+    val revealCaretIntoViewLive = rememberUpdatedState<() -> Unit> {
+        // 跟随「活动端」(head) 而非归一化的 selEnd：Shift+上/左 反向扩选时 head 在选区顶端，视口须随之上滚。
+        val caret = engine.caret
+        val line = caret.line
+        // softWrap 下露出光标所在的那一「视觉行」，而非整条可能高过视口的折行——否则长行会把光标顶出视口。
+        val curRow = if (softWrap) {
+            layoutFor(line)?.getLineForOffset(caret.column.coerceIn(0, engine.buffer.lineLength(line))) ?: 0
+        } else 0
+        val caretTop = lineTopPx(line) + curRow * lineHeightPx
+        val caretBottom = caretTop + lineHeightPx
+        if (caretTop < scrollY) scrollY = caretTop
+        else if (caretBottom > scrollY + viewportHeight) scrollY = caretBottom - viewportHeight
+        // 横向随动：不换行时若光标越出可见带则滚动露出（clip-gate：可见即不动、留 margin 前瞻）。纯纵向导航（目标列生效）
+        // 时跳过——否则目标列在短/长行间夹变会让视口横向来回 snap，很突兀。
+        if (!softWrap && viewportWidth > 0f && !engine.hasGoalColumn) {
+            caretContentXOf(line, caret.column)?.let { scrollX = revealScrollXFor(it, scrollX) }
+        }
+    }
+
+    // keep-in-view：光标随选区/视口变化滚动露出。用 snapshotFlow 观察 (selection, viewport)、不把 selection 当组合期 key（P1）。
+    // 观测集并入「是否正在手柄拖拽」：拖拽期标志为真、下方直接 return（滚动由边缘自动滚动接管）；拖拽结束标志 true→false 令
+    // snapshotFlow 再 emit 一次、门禁解除后复位一次（修「拖到短行后滚出屏、松手不复位」）。露出走上面的 rememberUpdatedState
+    // （当前帧几何）；effect 仍 key=Unit → 不随缩放重启、不会缩放后强行把视口滚到光标。
     LaunchedEffect(Unit) {
-        // 观测集并入「是否正在手柄拖拽」：拖拽期标志为真、下方直接 return（滚动由边缘自动滚动接管）；拖拽结束标志 true→false
-        // 令 snapshotFlow 再 emit 一次，此时门禁已解除、下方 clip-gate 复位一次——修复「拖到短行后光标/选区端点滚出屏幕、松手不
-        // 复位」（原 key 仅含 selection/视口：末次 setCursor 发生在门禁内、其后仅翻转标志又不改 key，故 collect 永不再跑、不复位）。
         snapshotFlow { Triple(engine.selection, viewportHeight, viewportWidth) to (selectionDragActive || caretDragActive) }.collect {
             if (viewportHeight <= 0f) return@collect
             if (selectionDragActive || caretDragActive) return@collect // 选区/光标手柄拖拽时由边缘自动滚动接管
-            // 跟随「活动端」(head) 而非归一化的 selEnd：Shift+上/左 反向扩选时 head 在选区顶端，视口须随之上滚。
-            val caret = engine.caret
-            val line = caret.line
-            // softWrap 下露出光标所在的那一「视觉行」，而非整条可能高过视口的折行——否则长行会把光标顶出视口。
-            val curRow = if (softWrap) {
-                layoutFor(line)?.getLineForOffset(caret.column.coerceIn(0, engine.buffer.lineLength(line))) ?: 0
-            } else 0
-            val caretTop = lineTopPx(line) + curRow * lineHeightPx
-            val caretBottom = caretTop + lineHeightPx
-            if (caretTop < scrollY) scrollY = caretTop
-            else if (caretBottom > scrollY + viewportHeight) scrollY = caretBottom - viewportHeight
-            // 横向随动：不换行时若光标越出可见带则滚动露出（clip-gate：可见即不动、留 margin 前瞻）。纯纵向导航（目标列生效）
-            // 时跳过——否则目标列在短/长行间夹变会让视口横向来回 snap，很突兀。
-            if (!softWrap && viewportWidth > 0f && !engine.hasGoalColumn) {
-                caretContentXOf(line, caret.column)?.let { scrollX = revealScrollXFor(it, scrollX) }
-            }
+            revealCaretIntoViewLive.value()
         }
     }
 
