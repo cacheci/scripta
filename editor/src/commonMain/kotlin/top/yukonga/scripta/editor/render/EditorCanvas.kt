@@ -17,6 +17,12 @@ import top.yukonga.scripta.editor.LruCache
 import top.yukonga.scripta.editor.text.TextPosition
 import top.yukonga.scripta.editor.text.TextRange
 
+/** 网格行可见列切片缓存的键：行 + 量化后的列窗口 [start,end) + 文档版本（编辑即失效）。 */
+private data class GridSliceKey(val line: Int, val start: Int, val end: Int, val version: Int)
+
+/** 网格行切片列窗口量化粒度：窗口左右对齐到 32 列倍数，横滚每 32 列才换一次 key、其余帧命中缓存。 */
+private const val GRID_SLICE_QUANTUM = 32
+
 /**
  * 只绘制可见行的画布。从 [firstVisibleLine] 向下按 [lineTopPx] 走，直到超出视口。行高取自各行 layout
  * （换行模式下一行可占多视觉行），因此对换行/不换行统一处理。
@@ -62,10 +68,15 @@ fun EditorCanvas(
     // 内部缓存（可见行常几十行、必然大量 miss）。numberStyle 变化（字号/配色）时整表失效；有界 LRU
     // 超上限淘汰最久未用，避免整表 clear() 把可见行号一并丢弃。缓存与逐帧重测输出一致，仅省掉重复布局。
     val numberLayoutCache = remember(numberStyle) { LruCache<Int, TextLayoutResult>(4096) }
+    // 网格行可见列切片缓存：横滚/纵向 fling 时避免每帧 textInRange 新建切片 String + measure 重 shaping。
+    // key 含文档版本（编辑即失效），列窗口量化到 32 列 → 窗口内滚动/闪烁/拖选帧全命中，横滚每 32 列才重测一次。
+    // textStyle 变化（字号/配色）整表失效。有界 LRU：网格行同屏通常个位数，256 足够。
+    val gridSliceCache = remember(textStyle) { LruCache<GridSliceKey, TextLayoutResult>(256) }
     Canvas(modifier) {
         // 在 draw 阶段读取滚动量：滚动只触发本画布重绘，不再让上层每滚 1px 重组。
         val sX = scrollX()
         val sY = scrollY()
+        val bufVersion = engine.buffer.version // 网格切片缓存键用；编辑变更即让旧切片失效
         val pinnedToScreen = lineNumberMode == LineNumberMode.PinnedToScreen
         // gutter 与行号的横向偏移：固定于屏幕钉在左侧（0）；固定于行随内容横移（sX），gutter 底色条连同行号
         // 一起向左滑出。两种模式都有区别于正文区的 gutter 底色（[colors.gutterBackground]）。
@@ -109,13 +120,20 @@ fun EditorCanvas(
                             drawRect(colors.selection, topLeft = Offset(textX + lineLen * charW, top), size = Size(lineHeightPx * 0.4f, h))
                         }
                     }
-                    // 正文：只切落在视口内的列窗口测量，避免 shaping 整行
+                    // 正文：只切落在视口内的列窗口测量，避免 shaping 整行。列窗口量化到 32 列倍数（左取整、右上取整
+                    // 钳到行长），使小幅横滚落在同一量化窗口 → 命中 gridSliceCache，仅每跨 32 列才重测；多切的 ≤64
+                    // 个字符落在视口外、由 clipToBounds 裁掉，视觉无差。
                     val textAreaWidth = (size.width - gutterWidthPx - padXPx * 2).coerceAtLeast(1f)
                     val cols = EditorGeometry.gridVisibleColumns(sX, textAreaWidth, charW, lineLen)
                     if (cols.last > cols.first) {
-                        val slice = engine.buffer.textInRange(TextRange(TextPosition(line, cols.first), TextPosition(line, cols.last)))
-                        val sliceLayout = textMeasurer.measure(slice, textStyle, softWrap = false)
-                        drawText(sliceLayout, color = colors.foreground, topLeft = Offset(textX + cols.first * charW, textTop))
+                        val q = GRID_SLICE_QUANTUM
+                        val qStart = (cols.first / q) * q
+                        val qEnd = (((cols.last + q - 1) / q) * q).coerceAtMost(lineLen)
+                        val sliceLayout = gridSliceCache.getOrPut(GridSliceKey(line, qStart, qEnd, bufVersion)) {
+                            val slice = engine.buffer.textInRange(TextRange(TextPosition(line, qStart), TextPosition(line, qEnd)))
+                            textMeasurer.measure(slice, textStyle, softWrap = false)
+                        }
+                        drawText(sliceLayout, color = colors.foreground, topLeft = Offset(textX + qStart * charW, textTop))
                     }
                     drawLineNumber(line, top)
                 }
