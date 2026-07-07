@@ -5,6 +5,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.awaitTouchSlopOrCancellation
 import androidx.compose.foundation.gestures.calculateCentroid
 import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
@@ -400,6 +401,11 @@ fun CodeEditor(
     // 只在拖拽「起/止」翻转的布尔，专作边缘自动滚动 effect 的 key。不能用 `selectionDragPos != null` 作 key：
     // 那会在组合期读逐帧写入的 selectionDragPos，使拖选的每次移动都整体重组（P1）。
     var selectionDragActive by remember { mutableStateOf(false) }
+    // 光标手柄拖拽的边缘自动滚动状态（与选区同机制，但落的是光标而非选区）：手柄拖到视口边缘热区时持续滚动、
+    // 让光标能拖到当前不可见的内容处（否则光标被 positionAt 钳在可见带内、拖不过边）。caretDragPos 逐帧写、只被
+    // effect 轮询（组合/绘制不读，写它不重组），已含手柄纵向抓取偏移 grabDy。caretDragActive 仅起/止翻转、作 effect key。
+    var caretDragPos by remember { mutableStateOf<Offset?>(null) }
+    var caretDragActive by remember { mutableStateOf(false) }
 
     var blink by remember { mutableStateOf(true) }
     // 选区变化即重置闪烁相位（光标一移立即可见）。用 snapshotFlow 在快照观察者里读 selection，而非把它当组合期
@@ -435,13 +441,35 @@ fun CodeEditor(
         caretHandleVisible = false
     }
 
+    // 光标/端点在其行内的内容 x（网格行等宽算术、其余走该行 layout）；无 layout 返回 null。keep-in-view 与两个边缘自动滚动
+    // effect 共用，做「横向 clip-gate 露出」。
+    fun caretContentXOf(line: Int, column: Int): Float? {
+        val col = column.coerceAtMost(engine.buffer.lineLength(line))
+        return if (isGridLine(line)) col * charWpx else layoutFor(line)?.getCursorRect(col)?.left
+    }
+
+    // clip-gate：把 [curScrollX] 夹到「让 [caretCX] 落在可见带 [x, x+textAreaW] 内、留 margin 前瞻」；已在带内则原样返回
+    //（可见即不动，不做「近边即滚」——避免点按落在可见靠边处被推滚）。仅用于不换行（换行 maxScrollX=0）。
+    fun revealScrollXFor(caretCX: Float, curScrollX: Float): Float {
+        val textAreaW = (viewportWidth - gutterWidthPx - padXPx * 2).coerceAtLeast(1f)
+        val margin = padXPx * 3
+        return when {
+            caretCX < curScrollX -> (caretCX - margin).coerceIn(0f, maxScrollX)
+            caretCX > curScrollX + textAreaW -> (caretCX - textAreaW + margin).coerceIn(0f, maxScrollX)
+            else -> curScrollX
+        }
+    }
+
     // keep-in-view：光标随选区/视口变化滚动露出。用 snapshotFlow 观察 (selection, viewport)，不把 selection
     // 当组合期 effect key（P1）；Triple 在选区或视口任一变化时 emit（覆盖原 key 集），emit 频率为「每次变化」
     // 而非逐帧，IME 动画期也只是逐帧 emit、无协程 cancel/relaunch。
     LaunchedEffect(Unit) {
-        snapshotFlow { Triple(engine.selection, viewportHeight, viewportWidth) }.collect {
+        // 观测集并入「是否正在手柄拖拽」：拖拽期标志为真、下方直接 return（滚动由边缘自动滚动接管）；拖拽结束标志 true→false
+        // 令 snapshotFlow 再 emit 一次，此时门禁已解除、下方 clip-gate 复位一次——修复「拖到短行后光标/选区端点滚出屏幕、松手不
+        // 复位」（原 key 仅含 selection/视口：末次 setCursor 发生在门禁内、其后仅翻转标志又不改 key，故 collect 永不再跑、不复位）。
+        snapshotFlow { Triple(engine.selection, viewportHeight, viewportWidth) to (selectionDragActive || caretDragActive) }.collect {
             if (viewportHeight <= 0f) return@collect
-            if (selectionDragActive) return@collect // 选区拖拽时由边缘自动滚动接管
+            if (selectionDragActive || caretDragActive) return@collect // 选区/光标手柄拖拽时由边缘自动滚动接管
             // 跟随「活动端」(head) 而非归一化的 selEnd：Shift+上/左 反向扩选时 head 在选区顶端，视口须随之上滚。
             val caret = engine.caret
             val line = caret.line
@@ -453,17 +481,10 @@ fun CodeEditor(
             val caretBottom = caretTop + lineHeightPx
             if (caretTop < scrollY) scrollY = caretTop
             else if (caretBottom > scrollY + viewportHeight) scrollY = caretBottom - viewportHeight
-            // 横向随动：不换行时若光标越过左/右缘，滚动露出光标并留一小段余量（换行下 maxScrollX=0，跳过）。
-            // 纯纵向导航（目标列生效）时跳过——否则目标列在短/长行间夹变会让视口横向来回 snap，很突兀。
+            // 横向随动：不换行时若光标越出可见带则滚动露出（clip-gate：可见即不动、留 margin 前瞻）。纯纵向导航（目标列生效）
+            // 时跳过——否则目标列在短/长行间夹变会让视口横向来回 snap，很突兀。
             if (!softWrap && viewportWidth > 0f && !engine.hasGoalColumn) {
-                val col = caret.column.coerceAtMost(engine.buffer.lineLength(line))
-                val caretX = if (isGridLine(line)) col * charWpx else layoutFor(line)?.getCursorRect(col)?.left
-                if (caretX != null) {
-                    val textAreaW = (viewportWidth - gutterWidthPx - padXPx * 2).coerceAtLeast(1f)
-                    val margin = padXPx * 3
-                    if (caretX < scrollX + margin) scrollX = (caretX - margin).coerceIn(0f, maxScrollX)
-                    else if (caretX > scrollX + textAreaW - margin) scrollX = (caretX - textAreaW + margin).coerceIn(0f, maxScrollX)
-                }
+                caretContentXOf(line, caret.column)?.let { scrollX = revealScrollXFor(it, scrollX) }
             }
         }
     }
@@ -575,6 +596,43 @@ fun CodeEditor(
                 val caret = positionAtWithScroll(pos, newY, newX)
                 if (wordAnchor != null) engine.selectWordRange(wordAnchor, caret)
                 else charAnchor?.let { engine.setSelection(it, caret) }
+            }
+            withFrameNanos { }
+        }
+    }
+
+    // 光标手柄拖拽的边缘自动滚动（与上方选区版同机制，但每帧落的是光标 setCursor 而非延伸选区）：手柄拖进边缘热区、
+    // 或按住不动停在热区时，逐帧滚动并把光标落到滚动后指下的内容处——于是能把光标一路拖到当前视口外的内容。
+    // 非热区时 step=0、不滚，光标由手势回调 setCursor 落定；二者同置光标、值一致、无冲突（与选区版对称）。
+    LaunchedEffect(caretDragActive) {
+        if (!caretDragActive) return@LaunchedEffect
+        while (true) {
+            val pos = caretDragPos ?: break
+            val maxY = liveMaxScrollY.value
+            val maxX = liveMaxScrollX.value
+            val stepY = edgeAutoScrollSpeed(pos.y, viewportHeight, lineHeightPx)
+            var stepX = edgeAutoScrollSpeed(pos.x, viewportWidth, lineHeightPx)
+            // 横向自动滚只在光标还能沿**当前行**推进时才进行：到行尾（右）/行首（左）即停，不把视口滚进该行文本右侧的空白。
+            // maxScrollX 是按最宽行算的全局上界；若当前行短（如 50 字符）而上下有更长行，全局 maxScrollX>0 会让 effect
+            // 误以为「右边还能滚」，于是滚进空白、光标却被 positionAt 钳在行尾不动。按当前行长度就地闸停，对齐成熟编辑器。
+            // 并 gate maxX>0：maxX==0（softWrap 或无横向余量）时归零 stepX 也改不动 newX，跳过、免每帧 positionAtWithScroll/layoutFor。
+            if (stepX != 0f && maxX > 0f) {
+                val cur = positionAtWithScroll(pos, scrollY, scrollX)
+                val lineLen = engine.buffer.lineLength(cur.line)
+                if ((stepX > 0f && cur.column >= lineLen) || (stepX < 0f && cur.column <= 0)) stepX = 0f
+            }
+            val newY = if (stepY != 0f && maxY > 0f) (scrollY + stepY).coerceIn(0f, maxY) else scrollY
+            var newX = if (stepX != 0f && maxX > 0f) (scrollX + stepX).coerceIn(0f, maxX) else scrollX
+            // 拖拽期即时露出：光标被短行钳到当前不可见处时，立刻横滚把它拉回可见带（不等松手）。在 edge-step 之后再夹，与之
+            // 不打架——长行推边时光标就在指下、在带内、revealScrollXFor 原样返回；仅短行钳出屏外才真正横滚。
+            if (!softWrap && maxX > 0f) {
+                val c = positionAtWithScroll(pos, newY, newX)
+                caretContentXOf(c.line, c.column)?.let { newX = revealScrollXFor(it, newX) }
+            }
+            if (newY != scrollY || newX != scrollX) {
+                scrollY = newY
+                scrollX = newX
+                engine.setCursor(positionAtWithScroll(pos, newY, newX))
             }
             withFrameNanos { }
         }
@@ -851,7 +909,22 @@ fun CodeEditor(
 
                     if (kind == HandleKind.Caret) {
                         engine.setCursor(mapped(p)); pingCaretHandle()
-                        drag(down.id) { change -> engine.setCursor(mapped(change.position)); change.consume() }
+                        // 先等真正拖动（越过 touchSlop）才进入重定位 + 边缘自动滚动；纯点按（按下即抬起、位移不过 slop）
+                        // 只落光标、绝不激活自动滚动——否则光标本就靠边时，一按到边缘热区就被 caretDrag effect 当成「停在边缘」
+                        // 带着滚。成熟编辑器正是以位移阈值区分：点=只落光标永不滚，拖=才滚，且自动滚是「拖拽进行时」的属性。
+                        // caretDragPos 存已含 grabDy 的目标点（与 mapped 同源），供 effect 判热区并逐帧落光标、可拖到视口外内容。
+                        val slop = awaitTouchSlopOrCancellation(down.id) { c, _ -> c.consume() }
+                        if (slop != null) {
+                            caretDragPos = Offset(slop.position.x, slop.position.y + grabDy)
+                            engine.setCursor(mapped(slop.position))
+                            caretDragActive = true
+                            drag(down.id) { change ->
+                                caretDragPos = Offset(change.position.x, change.position.y + grabDy)
+                                engine.setCursor(mapped(change.position)); change.consume()
+                            }
+                            caretDragActive = false
+                            caretDragPos = null
+                        }
                         pingCaretHandle() // 抬手后重置 4s 计时
                     } else {
                         val a = anchor!!
