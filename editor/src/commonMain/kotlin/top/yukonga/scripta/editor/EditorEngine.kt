@@ -3,21 +3,19 @@ package top.yukonga.scripta.editor
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import top.yukonga.scripta.editor.text.LineOffsetIndex
 import top.yukonga.scripta.editor.text.TextBuffer
 import top.yukonga.scripta.editor.text.TextPosition
 import top.yukonga.scripta.editor.text.TextRange
 
 /**
  * 编辑引擎：持有 TextBuffer + 归一化选择 + 可选 composing 区间，承载全部编辑/选择/IME 语义
- * （由 spike 的 MiniEditorState 推广到 (行,列) 坐标）。offset 只在 IME 边界经 LineOffsetIndex 换算。
+ * （由 spike 的 MiniEditorState 推广到 (行,列) 坐标）。offset 只在 IME 边界经 piece-tree（buffer.offsetAt/positionAt）换算。
  *
  * selection 恒为归一化（start ≤ end）；cursor 即 start == end。composing 为 null 表示无输入法预编辑。
  */
 class EditorEngine(initialText: String = "") {
 
     val buffer = TextBuffer()
-    private val index = LineOffsetIndex(buffer)
 
     var selection: TextRange by mutableStateOf(TextRange.cursor(TextPosition(0, 0)))
         private set
@@ -81,11 +79,11 @@ class EditorEngine(initialText: String = "") {
         l.onSelectionChanged(s.first, s.second, c.first, c.second)
     }
 
-    fun selectionOffsets(): Pair<Int, Int> = index.offsetOf(selStart) to index.offsetOf(selEnd)
+    fun selectionOffsets(): Pair<Int, Int> = buffer.offsetAt(selStart) to buffer.offsetAt(selEnd)
 
     fun composingOffsets(): Pair<Int, Int> {
         val c = composing ?: return -1 to -1
-        return index.offsetOf(c.start) to index.offsetOf(c.end)
+        return buffer.offsetAt(c.start) to buffer.offsetAt(c.end)
     }
 
     // --- 文本进出 ----------------------------------------------------------------------------
@@ -94,7 +92,6 @@ class EditorEngine(initialText: String = "") {
 
     fun setText(text: String) {
         buffer.setText(text)
-        index.invalidateFrom(0)
         collapseCaret(TextPosition(0, 0)) // 打开文件光标停在文首
         composing = null
         desiredColumn = null
@@ -128,9 +125,7 @@ class EditorEngine(initialText: String = "") {
     // --- 编辑原语 ----------------------------------------------------------------------------
 
     private fun replaceRange(range: TextRange, text: String) {
-        val startLine = range.normalized().start.line
         val newCaret = buffer.replace(range, text)
-        index.invalidateFrom(startLine)
         composing = null
         desiredColumn = null
         collapseCaret(newCaret)
@@ -142,7 +137,6 @@ class EditorEngine(initialText: String = "") {
     fun commitText(text: String, newCursorPosition: Int) {
         val target = (composing ?: selection).normalized()
         val newCaret = buffer.replace(target, text)
-        index.invalidateFrom(target.start.line)
         composing = null
         desiredColumn = null
         collapseCaret(cursorAfterInsert(target.start, newCursorPosition, newCaret))
@@ -172,7 +166,6 @@ class EditorEngine(initialText: String = "") {
     fun setComposingText(text: String, newCursorPosition: Int) {
         val target = (composing ?: selection).normalized()
         val newCaret = buffer.replace(target, text)
-        index.invalidateFrom(target.start.line)
         composing = if (text.isEmpty()) null else TextRange(target.start, newCaret)
         desiredColumn = null
         collapseCaret(cursorAfterInsert(target.start, newCursorPosition, newCaret))
@@ -181,8 +174,8 @@ class EditorEngine(initialText: String = "") {
 
     fun setComposingRegion(startOffset: Int, endOffset: Int) {
         val lo = minOf(startOffset, endOffset).coerceAtLeast(0)
-        val hi = maxOf(startOffset, endOffset).coerceAtMost(index.totalLength())
-        composing = if (lo == hi) null else TextRange(index.positionOf(lo), index.positionOf(hi))
+        val hi = maxOf(startOffset, endOffset).coerceAtMost(buffer.totalLength())
+        composing = if (lo == hi) null else TextRange(buffer.positionAt(lo), buffer.positionAt(hi))
         maybeNotify()
     }
 
@@ -197,17 +190,15 @@ class EditorEngine(initialText: String = "") {
 
     fun deleteSurroundingText(before: Int, after: Int) {
         val (selS, selE) = selectionOffsets()
-        val total = index.totalLength()
+        val total = buffer.totalLength()
         val delStart = (selS - before.coerceAtLeast(0)).coerceAtLeast(0)
         val delEnd = (selE + after.coerceAtLeast(0)).coerceAtMost(total)
-        // 先删尾段（不影响其前的 offset），再删头段。
-        buffer.replace(TextRange(index.positionOf(selE), index.positionOf(delEnd)), "")
-        index.invalidateFrom(index.positionOf(selE).line)
-        buffer.replace(TextRange(index.positionOf(delStart), index.positionOf(selS)), "")
-        index.invalidateFrom(index.positionOf(delStart).line)
+        // 先删尾段（不影响其前的 offset），再删头段。piece-tree 即时一致，无需失效索引。
+        buffer.replace(TextRange(buffer.positionAt(selE), buffer.positionAt(delEnd)), "")
+        buffer.replace(TextRange(buffer.positionAt(delStart), buffer.positionAt(selS)), "")
         composing = null
         desiredColumn = null
-        collapseCaret(index.positionOf(delStart))
+        collapseCaret(buffer.positionAt(delStart))
         maybeNotify()
     }
 
@@ -218,15 +209,15 @@ class EditorEngine(initialText: String = "") {
     }
 
     private fun textBeforeCursorString(n: Int): String {
-        val off = index.offsetOf(selStart)
+        val off = buffer.offsetAt(selStart)
         val start = (off - n).coerceAtLeast(0)
-        return buffer.textInRange(TextRange(index.positionOf(start), selStart))
+        return buffer.textInRange(TextRange(buffer.positionAt(start), selStart))
     }
 
     private fun textAfterCursorString(n: Int): String {
-        val off = index.offsetOf(selEnd)
-        val end = (off + n).coerceAtMost(index.totalLength())
-        return buffer.textInRange(TextRange(selEnd, index.positionOf(end)))
+        val off = buffer.offsetAt(selEnd)
+        val end = (off + n).coerceAtMost(buffer.totalLength())
+        return buffer.textInRange(TextRange(selEnd, buffer.positionAt(end)))
     }
 
     private fun charsForCodePoints(window: String, codePoints: Int, fromEnd: Boolean): Int {
@@ -323,10 +314,10 @@ class EditorEngine(initialText: String = "") {
 
     private fun cursorAfterInsert(insertStart: TextPosition, newCursorPosition: Int, insertedEnd: TextPosition): TextPosition {
         if (newCursorPosition == 1) return insertedEnd
-        val startOff = index.offsetOf(insertStart)
-        val endOff = index.offsetOf(insertedEnd)
+        val startOff = buffer.offsetAt(insertStart)
+        val endOff = buffer.offsetAt(insertedEnd)
         val raw = if (newCursorPosition > 0) endOff + (newCursorPosition - 1) else startOff + newCursorPosition
-        return index.positionOf(raw.coerceIn(0, index.totalLength()))
+        return buffer.positionAt(raw.coerceIn(0, buffer.totalLength()))
     }
 
     internal fun previousCodePointPosition(pos: TextPosition): TextPosition? {
