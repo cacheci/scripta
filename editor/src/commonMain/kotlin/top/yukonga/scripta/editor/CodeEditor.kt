@@ -542,11 +542,18 @@ fun CodeEditor(
                                     val baseX = scrollX.coerceIn(0f, liveMaxScrollX.value)
                                     fontSizeSp = next
                                     if (c != Offset.Unspecified) {
-                                        // 令焦点处内容缩放后不动：newScroll = (base + focal) * k - focal。
+                                        // 令焦点处内容缩放后不动：newScroll = (base + focal) * k - focal。纵向无 gutter 项、恒精确。
                                         scrollY = ((baseY + c.y) * k - c.y).coerceAtLeast(0f)
-                                        // 焦点相对正文起点；gutter 常量项随字号变、此处用旧宽近似，字号大变时横向有微量漂移（纵向精确）。
-                                        val fx = c.x - (hitGutterWidth.value + padXPx)
-                                        scrollX = ((baseX + fx) * k - fx).coerceAtLeast(0f)
+                                        // 横向：焦点相对正文起点 = c.x - (gutter + padX)。gutter 宽随字号变（行号字号 = 字号-1），
+                                        // 故 base+focal 项用「旧宽 fxOld」、末项用「新宽 fxNew」，否则字号大变时横向漂移。新宽按行号字号
+                                        // 比例从 live 旧宽线性推得（等宽 advance ∝ 字号，亚像素误差可忽略），只用 live 值、无需重测。
+                                        val gutterOld = hitGutterWidth.value
+                                        val numFontOld = (old - 1f).coerceAtLeast(6f)
+                                        val numFontNew = (next - 1f).coerceAtLeast(6f)
+                                        val gutterNew = (gutterOld - padXPx * 2) * (numFontNew / numFontOld) + padXPx * 2
+                                        val fxOld = c.x - (gutterOld + padXPx)
+                                        val fxNew = c.x - (gutterNew + padXPx)
+                                        scrollX = ((baseX + fxOld) * k - fxNew).coerceAtLeast(0f)
                                     } else {
                                         scrollY = baseY * k
                                     }
