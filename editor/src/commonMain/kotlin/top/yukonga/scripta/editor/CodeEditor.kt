@@ -28,6 +28,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
@@ -57,6 +58,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import top.yukonga.scripta.editor.input.editorTextInput
 import top.yukonga.scripta.editor.input.plainText
@@ -315,13 +317,23 @@ fun CodeEditor(
     // selectionAnchor：字符级锚（手柄端点拖拽）；selectionWordAnchor：词级锚（长按选词后按词扩展）。
     var selectionAnchor by remember { mutableStateOf<TextPosition?>(null) }
     var selectionWordAnchor by remember { mutableStateOf<TextRange?>(null) }
+    // 逐帧写入的拖拽坐标：只被 effect 协程体轮询，组合/绘制均不读——故写它不触发任何重组。
     var selectionDragPos by remember { mutableStateOf<Offset?>(null) }
+    // 只在拖拽「起/止」翻转的布尔，专作边缘自动滚动 effect 的 key。不能用 `selectionDragPos != null` 作 key：
+    // 那会在组合期读逐帧写入的 selectionDragPos，使拖选的每次移动都整体重组（P1）。
+    var selectionDragActive by remember { mutableStateOf(false) }
 
     var blink by remember { mutableStateOf(true) }
-    LaunchedEffect(engine.selection, readOnly) {
-        blink = true
-        if (!readOnly) while (true) {
-            delay(500.milliseconds); blink = !blink
+    // 选区变化即重置闪烁相位（光标一移立即可见）。用 snapshotFlow 在快照观察者里读 selection，而非把它当组合期
+    // effect key——否则拖选每次移动都会整体重组本可组合（含预测量循环）。collectLatest 在新选区到达时取消上一
+    // 轮闪烁循环，等价于「每次 selection 变化重启」。draw 里的 caretVisible 仍逐帧读 blink（重绘而非重组）。
+    LaunchedEffect(readOnly) {
+        if (readOnly) return@LaunchedEffect
+        snapshotFlow { engine.selection }.collectLatest {
+            blink = true
+            while (true) {
+                delay(500.milliseconds); blink = !blink
+            }
         }
     }
 
@@ -341,30 +353,35 @@ fun CodeEditor(
         caretHandleVisible = false
     }
 
-    LaunchedEffect(engine.selection, viewportHeight, viewportWidth) {
-        if (viewportHeight <= 0f) return@LaunchedEffect
-        if (selectionDragPos != null) return@LaunchedEffect // 选区拖拽时由边缘自动滚动接管
-        // 跟随「活动端」(head) 而非归一化的 selEnd：Shift+上/左 反向扩选时 head 在选区顶端，视口须随之上滚。
-        val caret = engine.caret
-        val line = caret.line
-        // softWrap 下露出光标所在的那一「视觉行」，而非整条可能高过视口的折行——否则长行会把光标顶出视口。
-        val curRow = if (softWrap) {
-            layoutFor(line)?.getLineForOffset(caret.column.coerceIn(0, engine.buffer.lineLength(line))) ?: 0
-        } else 0
-        val caretTop = lineTopPx(line) + curRow * lineHeightPx
-        val caretBottom = caretTop + lineHeightPx
-        if (caretTop < scrollY) scrollY = caretTop
-        else if (caretBottom > scrollY + viewportHeight) scrollY = caretBottom - viewportHeight
-        // 横向随动：不换行时若光标越过左/右缘，滚动露出光标并留一小段余量（换行下 maxScrollX=0，跳过）。
-        // 纯纵向导航（目标列生效）时跳过——否则目标列在短/长行间夹变会让视口横向来回 snap，很突兀。
-        if (!softWrap && viewportWidth > 0f && !engine.hasGoalColumn) {
-            val col = caret.column.coerceAtMost(engine.buffer.lineLength(line))
-            val caretX = if (isGridLine(line)) col * charWpx else layoutFor(line)?.getCursorRect(col)?.left
-            if (caretX != null) {
-                val textAreaW = (viewportWidth - gutterWidthPx - padXPx * 2).coerceAtLeast(1f)
-                val margin = padXPx * 3
-                if (caretX < scrollX + margin) scrollX = (caretX - margin).coerceIn(0f, maxScrollX)
-                else if (caretX > scrollX + textAreaW - margin) scrollX = (caretX - textAreaW + margin).coerceIn(0f, maxScrollX)
+    // keep-in-view：光标随选区/视口变化滚动露出。用 snapshotFlow 观察 (selection, viewport)，不把 selection
+    // 当组合期 effect key（P1）；Triple 在选区或视口任一变化时 emit（覆盖原 key 集），emit 频率为「每次变化」
+    // 而非逐帧，IME 动画期也只是逐帧 emit、无协程 cancel/relaunch。
+    LaunchedEffect(Unit) {
+        snapshotFlow { Triple(engine.selection, viewportHeight, viewportWidth) }.collect {
+            if (viewportHeight <= 0f) return@collect
+            if (selectionDragActive) return@collect // 选区拖拽时由边缘自动滚动接管
+            // 跟随「活动端」(head) 而非归一化的 selEnd：Shift+上/左 反向扩选时 head 在选区顶端，视口须随之上滚。
+            val caret = engine.caret
+            val line = caret.line
+            // softWrap 下露出光标所在的那一「视觉行」，而非整条可能高过视口的折行——否则长行会把光标顶出视口。
+            val curRow = if (softWrap) {
+                layoutFor(line)?.getLineForOffset(caret.column.coerceIn(0, engine.buffer.lineLength(line))) ?: 0
+            } else 0
+            val caretTop = lineTopPx(line) + curRow * lineHeightPx
+            val caretBottom = caretTop + lineHeightPx
+            if (caretTop < scrollY) scrollY = caretTop
+            else if (caretBottom > scrollY + viewportHeight) scrollY = caretBottom - viewportHeight
+            // 横向随动：不换行时若光标越过左/右缘，滚动露出光标并留一小段余量（换行下 maxScrollX=0，跳过）。
+            // 纯纵向导航（目标列生效）时跳过——否则目标列在短/长行间夹变会让视口横向来回 snap，很突兀。
+            if (!softWrap && viewportWidth > 0f && !engine.hasGoalColumn) {
+                val col = caret.column.coerceAtMost(engine.buffer.lineLength(line))
+                val caretX = if (isGridLine(line)) col * charWpx else layoutFor(line)?.getCursorRect(col)?.left
+                if (caretX != null) {
+                    val textAreaW = (viewportWidth - gutterWidthPx - padXPx * 2).coerceAtLeast(1f)
+                    val margin = padXPx * 3
+                    if (caretX < scrollX + margin) scrollX = (caretX - margin).coerceIn(0f, maxScrollX)
+                    else if (caretX > scrollX + textAreaW - margin) scrollX = (caretX - textAreaW + margin).coerceIn(0f, maxScrollX)
+                }
             }
         }
     }
@@ -425,8 +442,8 @@ fun CodeEditor(
 
     // 选区拖拽到视口上/下/左/右热区时，按帧持续纵横滚动并同步延伸选区；速度随进入热区的深度线性增大。
     // 词锚（长按选词）按词粒度扩展、字符锚（手柄端点）按字符扩展。
-    LaunchedEffect(selectionDragPos != null) {
-        if (selectionDragPos == null) return@LaunchedEffect
+    LaunchedEffect(selectionDragActive) {
+        if (!selectionDragActive) return@LaunchedEffect
         while (true) {
             val pos = selectionDragPos ?: break
             val wordAnchor = selectionWordAnchor
@@ -637,13 +654,14 @@ fun CodeEditor(
                         selectionAnchor = null
                         focusRequester.requestFocus()
                         selectionDragPos = p
+                        selectionDragActive = true
                     },
                     onDrag = { change, _ ->
                         selectionDragPos = change.position
                         selectionWordAnchor?.let { engine.selectWordRange(it, positionAtLive.value(change.position)) }
                     },
-                    onDragEnd = { selectionDragPos = null; selectionWordAnchor = null },
-                    onDragCancel = { selectionDragPos = null; selectionWordAnchor = null },
+                    onDragEnd = { selectionDragPos = null; selectionDragActive = false; selectionWordAnchor = null },
+                    onDragCancel = { selectionDragPos = null; selectionDragActive = false; selectionWordAnchor = null },
                 )
             }
             // 手柄拖拽：抓到光标/选区端点手柄即接管——重定位光标或调整选区端点；未抓到则不消费，让位给
@@ -694,12 +712,14 @@ fun CodeEditor(
                         selectionAnchor = a
                         selectionWordAnchor = null // 端点拖拽走字符级锚
                         selectionDragPos = p
+                        selectionDragActive = true
                         engine.setSelection(a, mapped(p))
                         drag(down.id) { change ->
                             selectionDragPos = change.position
                             engine.setSelection(a, mapped(change.position)); change.consume()
                         }
                         selectionDragPos = null
+                        selectionDragActive = false
                     }
                 }
             }
