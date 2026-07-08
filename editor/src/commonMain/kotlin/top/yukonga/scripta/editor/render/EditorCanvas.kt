@@ -312,10 +312,14 @@ fun EditorCanvas(
             }
         }
 
-        // gutter 不透明条 + 行号：横向**钉左**（hTranslate=0，不随焦点横移；正文/光标/手柄画完后铺，盖住横向滚进来的正文）、
-        // 纵向与正文一致（vTranslate）→ 数字与各行对齐、任意横滚下清晰，gutter 底色区别于正文区。缩放预览下条高覆盖整条
-        // 可见带 [preTop, preBottom]（缩放后恰为视口全高），行号在本块内随字号缩放、与正文行对齐。
-        withTransform({ translate(0f, vTranslate); scale(s, s, Offset.Zero) }) {
+        // gutter 不透明条 + 行号的横向变换分两种模式：
+        //  - 固定于屏幕（PinnedToScreen）：钉左，hTranslate=0，不随缩放焦点横移；正文/光标/手柄画完后铺、盖住横滚进来的正文。
+        //  - 固定于行（PinnedToLine）：gutter 属该行坐标系，须与正文用**同一**横向平移 hTranslateText——否则四向缩放横移时
+        //    正文按 screenX=s·px+hTranslateText 走、gutter 却按 s·px+0，行号/底色条与所属正文行横向脱节（错位 hTranslateText）。
+        //    静止与换行下 hTranslateText=0，退化为原「钉 0」，故此错位只在新的四向缩放横移时可见。
+        // 纵向两模式一致（vTranslate）→ 数字与各行对齐、任意横滚下清晰。缩放预览下条高覆盖整条可见带 [preTop, preBottom]。
+        val gutterHTranslate = if (pinnedToScreen) 0f else hTranslateText
+        withTransform({ translate(gutterHTranslate, vTranslate); scale(s, s, Offset.Zero) }) {
             drawRect(colors.gutterBackground, topLeft = Offset(-gutterScroll, preTop), size = Size(gutterWidthPx, preBottom - preTop))
             for ((line, top) in deferredNumbers) {
                 val num = numberLayoutCache.getOrPut(line) { textMeasurer.measure((line + 1).toString(), numberStyle) }
