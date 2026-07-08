@@ -1,20 +1,39 @@
 package top.yukonga.scripta.editor.render
 
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.RoundRect
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextMeasurer
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.drawText
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupProperties
 import top.yukonga.scripta.editor.EditorColors
 import top.yukonga.scripta.editor.EditorEngine
 import top.yukonga.scripta.editor.LineNumberMode
@@ -23,6 +42,7 @@ import top.yukonga.scripta.editor.text.TextPosition
 import top.yukonga.scripta.editor.text.TextRange
 import kotlin.math.PI
 import kotlin.math.acos
+import kotlin.math.roundToInt
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.sin
@@ -377,6 +397,304 @@ fun CursorOverlay(
             val textTop = lineTopPx(cLine) - sY + (refBaselinePx - layout.firstBaseline)
             val cr = layout.getCursorRect(col)
             drawLine(colors.cursor, Offset(textX + cr.left, textTop + cr.top + 1f), Offset(textX + cr.left, textTop + cr.bottom - 1f), strokeWidth = 2.5f)
+        }
+    }
+}
+
+// 放大镜（圆角胶囊）几何常量：固定物理尺寸（dp），内容按 [MAGNIFIER_SCALE] 放大。真机可再调。
+private val MAGNIFIER_WIDTH = 132.dp   // 胶囊宽
+private val MAGNIFIER_HEIGHT = 52.dp   // 胶囊高（角半径 = 高/2 → 两端半圆）
+private val MAGNIFIER_GAP = 22.dp      // 胶囊底与光标顶的间距（浮在其上、指尖不遮）
+private val MAGNIFIER_MARGIN = 8.dp    // 窗口边缘留白（胶囊贴边钳住不出界，含上浮到窗口顶时）
+private val MAGNIFIER_POPUP_PAD = 16.dp // 胶囊四周留白：容纳阴影/内阴影/玻璃折射外溢，并作 Popup 内容尺寸的边距
+private val MAGNIFIER_BORDER = 1.dp
+private const val MAGNIFIER_SCALE = 1.4f
+
+// 液态玻璃边（折射+色散，无模糊）参数——见 [magnifierGlassRenderEffect]。Android 13+ 与桌面(skiko) 生效，可再调。
+private val MAGNIFIER_REFRACTION_HEIGHT = 16.dp // 折射带自胶囊边缘向内的深度
+private val MAGNIFIER_REFRACTION_AMOUNT = 10.dp // 边缘最大折射位移
+private const val MAGNIFIER_DISPERSION = 0.15f  // 色散强度（0=无、越大彩边越明显）
+
+// 边缘内阴影：一圈由边向内递减的压暗 → 立体感（几道同心描边叠加近似柔和内阴影）。
+private val MAGNIFIER_RIM_WIDTH = 7.dp          // 内阴影带宽（自边缘向内）
+private const val MAGNIFIER_RIM_STEPS = 4       // 叠加道数（越多越柔）
+private const val MAGNIFIER_RIM_ALPHA = 0.10f   // 每道黑色 alpha（叠加后边缘最暗、向内渐隐）
+
+/** 当帧放大镜几何：光标屏幕位置、连续参考点、胶囊矩形——[MagnifierOverlay] 的 graphicsLayer（算玻璃边矩形）与 draw 共用，保证对齐。 */
+private class LoupeGeom(
+    val cLine: Int,
+    val col: Int,
+    val caretX: Float,
+    val caretTopY: Float,
+    val caretBotY: Float,
+    val refX: Float,
+    val refY: Float,
+    val cx: Float,
+    val cyc: Float,
+    val rect: Rect,
+    val radius: Float,
+)
+
+/**
+ * 移动光标 / 选区端点手柄时的放大镜层，叠在 [EditorCanvas]/[CursorOverlay] 之上（[active] 为真才画，松手即空）。
+ * 圆角胶囊内**重绘**光标附近数行 + 光标线，绕光标点按 [MAGNIFIER_SCALE] 放大——非位图快照（会糊；本项目缩放亦
+ * 否决位图放大）。坐标系与 [EditorCanvas] 完全一致（textX = gutter+pad−sX、drawText(layoutFor(line))），只是外面套一层
+ * 「绕参考点缩放 + 平移到胶囊中心」的 withTransform 并裁到胶囊形。
+ *
+ * **两轴都用连续手指位置（[dragPos]）而非离散光标**：光标只落在字符/行边界、按格跳，若胶囊/内容以 caretX/caretMidY 为
+ * 参考会跟着跳；改以逐帧手指 (x,y) 为参考（y 已含 grabDy ≈ 光标中心）→ 胶囊与放大内容两轴平滑跟手，光标线仍画在离散
+ * caretX/caretY、只在镜内按字符/行吸附。放大目标行 = [EditorEngine.caret]（选区端点拖拽即活动端 head），逐帧在 draw 读 →
+ * 零重组。超长网格行无整行 layout，测量光标附近一段列窗口绘制。
+ *
+ * 忠实镜像编辑器的光标/选区：空选区（拖光标手柄）画正文 + 随 [caretVisible]（blink）闪烁的光标；有选区（拖端点）画
+ * 正文 + [EditorColors.selection] 选区底色、不画光标（端点即选区高亮边缘）——与 [EditorCanvas]/[CursorOverlay] 一致。
+ *
+ * 边缘为「液态玻璃」（折射 + 色散，无模糊）+ 一圈内阴影（立体感）。Android 13+ 与桌面(skiko) 有实现，Android <13 退化描边。
+ *
+ * **宿主在窗口级 [Popup]**（而非编辑器内 Canvas）：胶囊需上浮到编辑器上方的工具栏/状态栏空间（近顶不被手指遮），但编辑器 Box
+ * 有 clipToBounds、且本层带 RenderEffect 会渲到与节点等大的离屏缓冲 → 画不出编辑器边界。故改为:一个零尺寸「锚」以 deferred
+ * `offset{}` 逐帧移到胶囊「编辑器局部」左上角（layout 阶段跟随、无重组），[Popup] 锚定它 → 映射到窗口坐标、越出编辑器边界。
+ * Popup 内容仅「胶囊 + [MAGNIFIER_POPUP_PAD]」大小、定位在手指上方 → 不抢拖拽触摸；玻璃 shader 只作用这一小块、uniform 恒定只建一次。
+ */
+@Composable
+fun MagnifierOverlay(
+    engine: EditorEngine,
+    colors: EditorColors,
+    active: () -> Boolean,
+    dragPos: () -> Offset?,
+    caretVisible: () -> Boolean,
+    viewportWidth: () -> Float,
+    contentTopInWindow: () -> Float,
+    scrollX: () -> Float,
+    scrollY: () -> Float,
+    lineTopPx: (Int) -> Float,
+    lineHeightPx: Float,
+    refBaselinePx: Float,
+    layoutFor: (Int) -> TextLayoutResult?,
+    textMeasurer: TextMeasurer,
+    textStyle: TextStyle,
+    charW: Float,
+    isGridLine: (Int) -> Boolean,
+    gridRefBaseline: Float,
+    gridRefCursorTop: Float,
+    gridRefCursorBottom: Float,
+    gutterWidthPx: Float,
+    padXPx: Float,
+) {
+    // show/hide 快速淡入淡出：alpha 随 active 起落，Popup 内容 graphicsLayer 应用整层透明度。淡入偏快（抓取即现）、淡出稍慢
+    // （消失最显突兀，给足过渡）；都仍是「快速」量级，时长可再调。
+    val showing = active()
+    val alpha = animateFloatAsState(
+        targetValue = if (showing) 1f else 0f,
+        animationSpec = tween(durationMillis = if (showing) 160 else 260),
+        label = "magnifierAlpha",
+    )
+    // Popup 存在与否：alpha>~0（可见或淡出中）才挂 Popup。用 derivedStateOf 只在阈值翻转时重组（非逐帧）；淡出的渐隐由内容
+    // graphicsLayer 的 alpha 完成，alpha≈0 时才撤 Popup。
+    val visible by remember { derivedStateOf { alpha.value > 0.001f } }
+    // 最后一帧的连续参考点 [x,y]（普通 remember、非快照——写不触发重组/重绘）。松手后 dragPos 置空时用它 → 胶囊留在原位淡出，
+    // 而非回落到吸附后的最终光标位置再淡出。NaN 表示尚无有效值（回落到光标）。
+    val lastRef = remember { floatArrayOf(Float.NaN, Float.NaN) }
+    // 支持液态玻璃边（Android 13+ / 桌面）时靠玻璃 rim 界定边缘、不画硬描边；不支持（Android <13）时才退化画描边。
+    val glassSupported = remember { isMagnifierGlassSupported() }
+    val density = LocalDensity.current
+    // 玻璃 RenderEffect：胶囊在 Popup 内容中固定于 (pad,pad,wl,hl) → uniform 恒定、只建一次；作用图层仅「胶囊+2·pad」大小 → shader 有界省算。
+    val glassEffect = remember(density, glassSupported) {
+        if (!glassSupported) null else with(density) {
+            magnifierGlassRenderEffect(
+                left = MAGNIFIER_POPUP_PAD.toPx(),
+                top = MAGNIFIER_POPUP_PAD.toPx(),
+                width = MAGNIFIER_WIDTH.toPx(),
+                height = MAGNIFIER_HEIGHT.toPx(),
+                cornerRadius = MAGNIFIER_HEIGHT.toPx() / 2f,
+                refractionHeight = MAGNIFIER_REFRACTION_HEIGHT.toPx(),
+                refractionAmount = MAGNIFIER_REFRACTION_AMOUNT.toPx(),
+                chromaticAberration = MAGNIFIER_DISPERSION,
+            )
+        }
+    }
+
+    // 当帧胶囊几何（**编辑器局部坐标**）。offset 锚（定位 Popup）与 Popup 内 Canvas（画内容）都调它 → 同帧同值。dragPos 非空时记
+    // lastRef（两处调用同帧同值、幂等）。返回 null（当前行无 layout）时不定位/不画。
+    fun computeLoupe(d: Density): LoupeGeom? {
+        val sX = scrollX()
+        val sY = scrollY()
+        val pos = engine.caret
+        val cLine = pos.line
+        val col = pos.column.coerceIn(0, engine.buffer.lineLength(cLine))
+        val textX = gutterWidthPx + padXPx - sX
+        val caretX: Float
+        val caretTopY: Float
+        val caretBotY: Float
+        if (isGridLine(cLine)) {
+            val base = lineTopPx(cLine) - sY + (refBaselinePx - gridRefBaseline)
+            caretX = textX + col * charW
+            caretTopY = base + gridRefCursorTop
+            caretBotY = base + gridRefCursorBottom
+        } else {
+            val layout = layoutFor(cLine) ?: return null
+            val cr = layout.getCursorRect(col)
+            val base = lineTopPx(cLine) - sY + (refBaselinePx - layout.firstBaseline)
+            caretX = textX + cr.left
+            caretTopY = base + cr.top
+            caretBotY = base + cr.bottom
+        }
+        val caretMidY = (caretTopY + caretBotY) / 2f
+        // 两轴参考用连续手指位置（拖拽点：x 为原始手指 x、y 为含 grabDy 的光标中心 y），松手无拖拽点时用 lastRef 定格、再无回落光标。
+        val dp = dragPos()
+        val refX: Float
+        val refY: Float
+        if (dp != null) {
+            refX = dp.x
+            refY = dp.y
+            lastRef[0] = refX
+            lastRef[1] = refY
+        } else {
+            refX = if (lastRef[0].isNaN()) caretX else lastRef[0]
+            refY = if (lastRef[1].isNaN()) caretMidY else lastRef[1]
+        }
+        val wl = with(d) { MAGNIFIER_WIDTH.toPx() }
+        val hl = with(d) { MAGNIFIER_HEIGHT.toPx() }
+        val gap = with(d) { MAGNIFIER_GAP.toPx() }
+        val margin = with(d) { MAGNIFIER_MARGIN.toPx() }
+        val radius = hl / 2f
+        val halfW = wl / 2f
+        // 胶囊中心 x 跟随手指、贴左右边缘钳住（按视口宽）；垂直始终浮在光标上方 gap（refY≈光标中心，减半行 → 连续「光标顶」）。
+        val cx = refX.coerceIn(margin + halfW, (viewportWidth() - margin - halfW).coerceAtLeast(margin + halfW))
+        // 顶部下限允许上浮到窗口顶附近（越过工具栏/状态栏）：胶囊顶在窗口 y ≥ margin ⇒ 编辑器局部 top ≥ margin − 内容顶在窗口 y。
+        val minTop = margin - contentTopInWindow()
+        val top = (refY - lineHeightPx / 2f - gap - hl).coerceAtLeast(minTop)
+        val cyc = top + hl / 2f
+        return LoupeGeom(cLine, col, caretX, caretTopY, caretBotY, refX, refY, cx, cyc, Rect(cx - halfW, top, cx + halfW, top + hl), radius)
+    }
+
+    // 零尺寸锚：deferred offset 到胶囊「编辑器局部」左上角（layout 阶段逐帧跟随、无重组；闲时 alpha≈0 直接归零、不读 caret/scroll）。
+    // Popup 锚定它 → 映射到窗口坐标、越出编辑器 clipToBounds 的边界，可浮到工具栏/状态栏上。
+    Box(
+        Modifier.offset {
+            if (alpha.value <= 0.001f) IntOffset.Zero
+            else computeLoupe(this)?.let { IntOffset(it.rect.left.roundToInt(), it.rect.top.roundToInt()) } ?: IntOffset.Zero
+        }
+    ) {
+        if (visible) {
+            val padPx = with(density) { MAGNIFIER_POPUP_PAD.roundToPx() }
+            Popup(
+                alignment = Alignment.TopStart,
+                offset = IntOffset(-padPx, -padPx), // 胶囊在 Popup 内容里位于 (pad,pad)，故内容左上 = 锚(胶囊左上) − pad
+                properties = PopupProperties(focusable = false, clippingEnabled = false),
+            ) {
+                Canvas(
+                    Modifier
+                        .size(MAGNIFIER_WIDTH + MAGNIFIER_POPUP_PAD * 2, MAGNIFIER_HEIGHT + MAGNIFIER_POPUP_PAD * 2)
+                        .graphicsLayer {
+                            this.alpha = alpha.value
+                            renderEffect = glassEffect // 恒定：胶囊在图层内固定位置，uniform 不变、只建一次
+                        }
+                ) {
+                    val g = computeLoupe(this) ?: return@Canvas
+                    val m = MAGNIFIER_SCALE
+                    val pad = MAGNIFIER_POPUP_PAD.toPx()
+                    val wl = MAGNIFIER_WIDTH.toPx()
+                    val hl = MAGNIFIER_HEIGHT.toPx()
+                    val radius = g.radius
+                    val sY = scrollY()
+                    val textX = gutterWidthPx + padXPx - scrollX()
+                    val sel = engine.selection // 有选区（拖端点）→ 画选区底色、不画光标；空选区（拖光标）→ 画随 blink 的光标
+                    val loupeRect = Rect(pad, pad, pad + wl, pad + hl) // Popup 内容局部坐标（胶囊固定于此、玻璃 uniform 与之对齐）
+
+                    // 轻微下偏阴影 → 悬浮感
+                    drawRoundRect(
+                        color = Color.Black.copy(alpha = 0.18f),
+                        topLeft = Offset(loupeRect.left, loupeRect.top + 2f),
+                        size = loupeRect.size,
+                        cornerRadius = CornerRadius(radius, radius),
+                    )
+
+                    val clip = Path().apply { addRoundRect(RoundRect(loupeRect, CornerRadius(radius, radius))) }
+                    clipPath(clip) {
+                        drawRect(colors.background, topLeft = loupeRect.topLeft, size = loupeRect.size)
+                        // 放大变换：编辑器局部内容点 (ex,ey) → Popup 内胶囊中心 (pad+wl/2, pad+hl/2)，绕连续参考点 (refX,refY) 放大 m。
+                        withTransform({
+                            translate((pad + wl / 2f) - m * g.refX, (pad + hl / 2f) - m * g.refY)
+                            scale(m, m, Offset.Zero)
+                        }) {
+                            val lineCount = engine.buffer.lineCount
+                            val first = (g.cLine - 2).coerceAtLeast(0)
+                            val last = (g.cLine + 2).coerceAtMost(lineCount - 1)
+                            var ln = first
+                            while (ln <= last) {
+                                val lineTop = lineTopPx(ln) - sY
+                                // 选区底色（在正文下）：与 EditorCanvas 同式——本行落在 [sel.start.line, sel.end.line] 内即画首/末列间的高亮，
+                                // 非末行再补一小段行尾换行位。网格行走等宽矩形、其余走 layout 的 range path。
+                                val inSel = !sel.isEmpty && ln >= sel.start.line && ln <= sel.end.line
+                                if (isGridLine(ln)) {
+                                    val textTop = lineTop + (refBaselinePx - gridRefBaseline)
+                                    val len = engine.buffer.lineLength(ln)
+                                    if (inSel) {
+                                        val cS = if (ln == sel.start.line) sel.start.column else 0
+                                        val cE = if (ln == sel.end.line) sel.end.column else len
+                                        if (cE > cS) drawRect(colors.selection, topLeft = Offset(textX + cS * charW, lineTop), size = Size((cE - cS) * charW, lineHeightPx))
+                                        if (ln != sel.end.line) drawRect(colors.selection, topLeft = Offset(textX + len * charW, lineTop), size = Size(lineHeightPx * 0.4f, lineHeightPx))
+                                    }
+                                    val c0 = (g.col - 24).coerceIn(0, len)
+                                    val c1 = (g.col + 24).coerceIn(0, len)
+                                    if (c1 > c0) {
+                                        val slice = engine.buffer.textInRange(TextRange(TextPosition(ln, c0), TextPosition(ln, c1)))
+                                        val sl = textMeasurer.measure(slice, textStyle, softWrap = false)
+                                        drawText(sl, color = colors.foreground, topLeft = Offset(textX + c0 * charW, textTop))
+                                    }
+                                } else {
+                                    val layout = layoutFor(ln)
+                                    if (layout != null) {
+                                        val textTop = lineTop + (refBaselinePx - layout.firstBaseline)
+                                        if (inSel) {
+                                            val len = engine.buffer.lineLength(ln)
+                                            val cS = if (ln == sel.start.line) sel.start.column else 0
+                                            val cE = if (ln == sel.end.line) sel.end.column else len
+                                            if (cE > cS) {
+                                                val path = layout.getPathForRange(cS, cE)
+                                                path.translate(Offset(textX, textTop))
+                                                drawPath(path, colors.selection)
+                                            }
+                                            if (ln != sel.end.line) {
+                                                val cr = layout.getCursorRect(len)
+                                                drawRect(colors.selection, topLeft = Offset(textX + cr.left, textTop + cr.top), size = Size(lineHeightPx * 0.4f, cr.bottom - cr.top))
+                                            }
+                                        }
+                                        drawText(layout, color = colors.foreground, topLeft = Offset(textX, textTop))
+                                    }
+                                }
+                                ln++
+                            }
+                            // 光标线：仅空选区（拖光标手柄）时画，且随 blink（caretVisible）闪烁；有选区（拖端点）时不画、端点由选区边缘体现。
+                            if (sel.isEmpty && caretVisible()) {
+                                drawLine(colors.cursor, Offset(g.caretX, g.caretTopY), Offset(g.caretX, g.caretBotY), strokeWidth = 1.6f)
+                            }
+                        }
+                        // 边缘内阴影（立体感）：几道同心圆角描边、宽度递增 alpha 恒定——边缘处叠满最暗、向内渐隐；描边居中于胶囊边、外半被 clip 裁掉。
+                        val rimW = MAGNIFIER_RIM_WIDTH.toPx()
+                        for (i in 1..MAGNIFIER_RIM_STEPS) {
+                            drawRoundRect(
+                                color = Color.Black.copy(alpha = MAGNIFIER_RIM_ALPHA),
+                                topLeft = loupeRect.topLeft,
+                                size = loupeRect.size,
+                                cornerRadius = CornerRadius(radius, radius),
+                                style = Stroke(width = rimW * i / MAGNIFIER_RIM_STEPS * 2f),
+                            )
+                        }
+                    }
+                    // 边框：仅无液态玻璃边的平台画（玻璃 rim 已界定边缘；有玻璃时再画硬描边会与折射 rim 打架）。
+                    if (!glassSupported) {
+                        drawRoundRect(
+                            color = colors.gutterForeground.copy(alpha = 0.35f),
+                            topLeft = loupeRect.topLeft,
+                            size = loupeRect.size,
+                            cornerRadius = CornerRadius(radius, radius),
+                            style = Stroke(width = MAGNIFIER_BORDER.toPx()),
+                        )
+                    }
+                }
+            }
         }
     }
 }

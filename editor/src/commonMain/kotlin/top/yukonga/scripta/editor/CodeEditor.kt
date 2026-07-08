@@ -45,7 +45,9 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -67,6 +69,7 @@ import top.yukonga.scripta.editor.input.plainText
 import top.yukonga.scripta.editor.input.plainTextClipEntry
 import top.yukonga.scripta.editor.render.CursorOverlay
 import top.yukonga.scripta.editor.render.EditorCanvas
+import top.yukonga.scripta.editor.render.MagnifierOverlay
 import top.yukonga.scripta.editor.render.EditorGeometry
 import top.yukonga.scripta.editor.render.HandleKind
 import top.yukonga.scripta.editor.render.VisualRowIndex
@@ -227,6 +230,8 @@ fun CodeEditor(
     var scrollX by remember { mutableFloatStateOf(0f) }
     var viewportWidth by remember { mutableFloatStateOf(0f) }
     var viewportHeight by remember { mutableFloatStateOf(0f) }
+    // 编辑器内容区顶边在窗口中的 y（放大镜 Popup 用它把胶囊上浮到工具栏/状态栏空间、不越出窗口顶）。IME/旋转会变，实时更新。
+    var contentTopInWindow by remember { mutableFloatStateOf(0f) }
 
     // 换行模式下正文可用宽度（测量宽度约束）。
     val textAreaWidthPx = (viewportWidth - gutterWidthPx - padXPx * 2).coerceAtLeast(1f)
@@ -408,6 +413,9 @@ fun CodeEditor(
     // effect 轮询（组合/绘制不读，写它不重组），已含手柄纵向抓取偏移 grabDy。caretDragActive 仅起/止翻转、作 effect key。
     var caretDragPos by remember { mutableStateOf<Offset?>(null) }
     var caretDragActive by remember { mutableStateOf(false) }
+    // 放大镜显示条件：仅「光标手柄 / 选区端点手柄」拖拽时（下方最内层 pointerInput 的两支）为真——不含长按选择拖拽
+    // （那支只置 selectionDragActive）。逐帧被放大镜层在 draw 读、只起/止翻转 → 不重组。
+    var handleDragActive by remember { mutableStateOf(false) }
 
     var blink by remember { mutableStateOf(true) }
     // 选区变化即重置闪烁相位（光标一移立即可见）。用 snapshotFlow 在快照观察者里读 selection，而非把它当组合期
@@ -692,6 +700,7 @@ fun CodeEditor(
             .clipToBounds()
             .overscroll(overscroll)
             .onSizeChanged { viewportWidth = it.width.toFloat(); viewportHeight = it.height.toFloat() }
+            .onGloballyPositioned { contentTopInWindow = it.positionInWindow().y }
             .scrollable2D(scroll2D, overscrollEffect = overscroll, interactionSource = scrollInteraction)
             .pointerInput(Unit) {
                 // 双指缩放 + 缩放后单指跟手平移（一个连续手势内完成，避免与 scrollable 交接跳变）。≥2 指时累积连续 previewScale
@@ -963,6 +972,7 @@ fun CodeEditor(
                             engine.setCursor(mapped(slop.position))
                             if (engine.caret != lastHaptic) { haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove); lastHaptic = engine.caret }
                             caretDragActive = true
+                            handleDragActive = true
                             drag(down.id) { change ->
                                 caretDragPos = Offset(change.position.x, change.position.y + grabDy)
                                 engine.setCursor(mapped(change.position))
@@ -970,6 +980,7 @@ fun CodeEditor(
                                 change.consume()
                             }
                             caretDragActive = false
+                            handleDragActive = false
                             caretDragPos = null
                         }
                         pingCaretHandle() // 抬手后重置 4s 计时
@@ -985,6 +996,7 @@ fun CodeEditor(
                             // 手柄泪滴（在光标下方约 1.5 行）所在行做「按行闸停」，落到下方短行 → 误判行尾、横向不滚。与光标手柄一致。
                             selectionDragPos = Offset(slop.position.x, slop.position.y + grabDy)
                             selectionDragActive = true
+                            handleDragActive = true
                             // 端点每落到「新字符/行」补一次轻震，与光标手柄一致；比较落定后的活动端 engine.caret
                             // （setSelection 的 head，已 clamp）。lastHaptic 初值为抓取的端点位置。
                             var lastHaptic = grabbed
@@ -998,6 +1010,7 @@ fun CodeEditor(
                             }
                             selectionDragPos = null
                             selectionDragActive = false
+                            handleDragActive = false
                         }
                     }
                 }
@@ -1056,6 +1069,32 @@ fun CodeEditor(
             padXPx = padXPx,
             previewScale = { previewScale }, // 缩放预览期不画光标（正文在缩放、光标会脱节）
             modifier = Modifier.fillMaxSize(),
+        )
+        // 放大镜：宿主在窗口级 Popup（可浮到编辑器上方的工具栏/状态栏空间），仅光标/选区端点手柄拖拽时（handleDragActive）出现。
+        MagnifierOverlay(
+            engine = engine,
+            colors = colors,
+            active = { handleDragActive },
+            // 连续手指位置（逐帧写）：光标手柄用 caretDragPos、选区端点用 selectionDragPos；胶囊据其 x 平滑跟手不跳。
+            dragPos = { caretDragPos ?: selectionDragPos },
+            caretVisible = { !readOnly && blink }, // 镜内光标随主编辑器同一 blink 闪烁
+            viewportWidth = { viewportWidth },     // 水平钳制到视口
+            contentTopInWindow = { contentTopInWindow }, // 允许胶囊上浮到窗口顶附近
+            scrollX = { scrollX.coerceIn(0f, maxScrollX) },
+            scrollY = { scrollY.coerceIn(0f, maxScrollY) },
+            lineTopPx = ::lineTopPx,
+            lineHeightPx = lineHeightPx,
+            refBaselinePx = refBaselinePx,
+            layoutFor = ::layoutFor,
+            textMeasurer = measurer,
+            textStyle = textStyle,
+            charW = charWpx,
+            isGridLine = ::isGridLine,
+            gridRefBaseline = gridRefBaseline,
+            gridRefCursorTop = gridRefCursor.top,
+            gridRefCursorBottom = gridRefCursor.bottom,
+            gutterWidthPx = gutterWidthPx,
+            padXPx = padXPx,
         )
     }
 }
