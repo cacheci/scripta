@@ -160,7 +160,7 @@ private class EditorTextInputNode(var engine: EditorEngine) :
                 // NO_PERSONALIZED_LEARNING（API 26+，旧版忽略）：别把代码喂进输入法个人词库。
                 outAttrs.imeOptions =
                     EditorInfo.IME_ACTION_NONE or EditorInfo.IME_FLAG_NO_FULLSCREEN or
-                        EditorInfo.IME_FLAG_NO_EXTRACT_UI or EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING
+                            EditorInfo.IME_FLAG_NO_EXTRACT_UI or EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING
                 val (s, e) = engine.selectionOffsets()
                 outAttrs.initialSelStart = s
                 outAttrs.initialSelEnd = e

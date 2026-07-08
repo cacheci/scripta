@@ -42,9 +42,9 @@ import top.yukonga.scripta.editor.text.TextPosition
 import top.yukonga.scripta.editor.text.TextRange
 import kotlin.math.PI
 import kotlin.math.acos
-import kotlin.math.roundToInt
 import kotlin.math.atan2
 import kotlin.math.cos
+import kotlin.math.roundToInt
 import kotlin.math.sin
 
 /** 网格行可见列切片缓存的键：行 + 量化后的列窗口 [start,end) + 文档版本（编辑即失效）。 */
@@ -201,7 +201,11 @@ fun EditorCanvas(
                                 drawRect(colors.selection, topLeft = Offset(textX + cS * charW, top), size = Size((cE - cS) * charW, h))
                             }
                             if (line != sel.end.line) {
-                                drawRect(colors.selection, topLeft = Offset(textX + lineLen * charW, top), size = Size(lineHeightPx * 0.4f, h))
+                                drawRect(
+                                    colors.selection,
+                                    topLeft = Offset(textX + lineLen * charW, top),
+                                    size = Size(lineHeightPx * 0.4f, h)
+                                )
                             }
                         }
                         // 正文：只切落在视口内的列窗口测量，避免 shaping 整行。列窗口量化到 32 列倍数（左取整、右上取整
@@ -210,7 +214,12 @@ fun EditorCanvas(
                         // 可见列窗口按预览缩放补偿：缩小(s<1)时屏上可见内容宽 = size.width/s（更宽），左缘内容 x 随焦点缩放偏移
                         // hTranslateText/s；否则切片覆盖不到缩小后新露出的右侧列 → 长行右段缺失。s==1 退化为原状（仅切文本区）。
                         val cols = if (s == 1f) {
-                            EditorGeometry.gridVisibleColumns(sX, (size.width - gutterWidthPx - padXPx * 2).coerceAtLeast(1f), charW, lineLen)
+                            EditorGeometry.gridVisibleColumns(
+                                sX,
+                                (size.width - gutterWidthPx - padXPx * 2).coerceAtLeast(1f),
+                                charW,
+                                lineLen
+                            )
                         } else {
                             EditorGeometry.gridVisibleColumns(sX - hTranslateText / s, size.width / s, charW, lineLen)
                         }
@@ -344,7 +353,11 @@ fun EditorCanvas(
             for ((line, top) in deferredNumbers) {
                 val num = numberLayoutCache.getOrPut(line) { textMeasurer.measure((line + 1).toString(), numberStyle) }
                 val numTop = top + (refBaselinePx - num.firstBaseline)
-                drawText(num, color = colors.gutterForeground, topLeft = Offset(gutterWidthPx - padXPx - num.size.width - gutterScroll, numTop))
+                drawText(
+                    num,
+                    color = colors.gutterForeground,
+                    topLeft = Offset(gutterWidthPx - padXPx - num.size.width - gutterScroll, numTop)
+                )
             }
         }
     }
@@ -391,12 +404,22 @@ fun CursorOverlay(
         if (isGridLine(cLine)) {
             val textTop = lineTopPx(cLine) - sY + (refBaselinePx - gridRefBaseline)
             val x = textX + col * charW
-            drawLine(colors.cursor, Offset(x, textTop + gridRefCursorTop + 1f), Offset(x, textTop + gridRefCursorBottom - 1f), strokeWidth = 2.5f)
+            drawLine(
+                colors.cursor,
+                Offset(x, textTop + gridRefCursorTop + 1f),
+                Offset(x, textTop + gridRefCursorBottom - 1f),
+                strokeWidth = 2.5f
+            )
         } else {
             val layout = layoutFor(cLine) ?: return@Canvas
             val textTop = lineTopPx(cLine) - sY + (refBaselinePx - layout.firstBaseline)
             val cr = layout.getCursorRect(col)
-            drawLine(colors.cursor, Offset(textX + cr.left, textTop + cr.top + 1f), Offset(textX + cr.left, textTop + cr.bottom - 1f), strokeWidth = 2.5f)
+            drawLine(
+                colors.cursor,
+                Offset(textX + cr.left, textTop + cr.top + 1f),
+                Offset(textX + cr.left, textTop + cr.bottom - 1f),
+                strokeWidth = 2.5f
+            )
         }
     }
 }
@@ -633,8 +656,16 @@ fun MagnifierOverlay(
                                     if (inSel) {
                                         val cS = if (ln == sel.start.line) sel.start.column else 0
                                         val cE = if (ln == sel.end.line) sel.end.column else len
-                                        if (cE > cS) drawRect(colors.selection, topLeft = Offset(textX + cS * charW, lineTop), size = Size((cE - cS) * charW, lineHeightPx))
-                                        if (ln != sel.end.line) drawRect(colors.selection, topLeft = Offset(textX + len * charW, lineTop), size = Size(lineHeightPx * 0.4f, lineHeightPx))
+                                        if (cE > cS) drawRect(
+                                            colors.selection,
+                                            topLeft = Offset(textX + cS * charW, lineTop),
+                                            size = Size((cE - cS) * charW, lineHeightPx)
+                                        )
+                                        if (ln != sel.end.line) drawRect(
+                                            colors.selection,
+                                            topLeft = Offset(textX + len * charW, lineTop),
+                                            size = Size(lineHeightPx * 0.4f, lineHeightPx)
+                                        )
                                     }
                                     val c0 = (g.col - 24).coerceIn(0, len)
                                     val c1 = (g.col + 24).coerceIn(0, len)
@@ -658,7 +689,11 @@ fun MagnifierOverlay(
                                             }
                                             if (ln != sel.end.line) {
                                                 val cr = layout.getCursorRect(len)
-                                                drawRect(colors.selection, topLeft = Offset(textX + cr.left, lineTop), size = Size(lineHeightPx * 0.4f, lineHeightPx))
+                                                drawRect(
+                                                    colors.selection,
+                                                    topLeft = Offset(textX + cr.left, lineTop),
+                                                    size = Size(lineHeightPx * 0.4f, lineHeightPx)
+                                                )
                                             }
                                         }
                                         drawText(layout, color = colors.foreground, topLeft = Offset(textX, textTop))

@@ -61,7 +61,6 @@ import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import top.yukonga.scripta.editor.input.editorTextInput
@@ -69,9 +68,9 @@ import top.yukonga.scripta.editor.input.plainText
 import top.yukonga.scripta.editor.input.plainTextClipEntry
 import top.yukonga.scripta.editor.render.CursorOverlay
 import top.yukonga.scripta.editor.render.EditorCanvas
-import top.yukonga.scripta.editor.render.MagnifierOverlay
 import top.yukonga.scripta.editor.render.EditorGeometry
 import top.yukonga.scripta.editor.render.HandleKind
+import top.yukonga.scripta.editor.render.MagnifierOverlay
 import top.yukonga.scripta.editor.render.VisualRowIndex
 import top.yukonga.scripta.editor.render.ZoomMath
 import top.yukonga.scripta.editor.text.TextPosition
@@ -104,11 +103,12 @@ private const val NUMBER_FONT_SCALE = 13f / 14f
 private const val PAD_X_BASE_DP = 8f
 
 /**
- * 底部可滚过文末的留白（视口高比例）。**暂设 0（关闭）**：它加进 maxScrollY 后，会与 IME 改变视口触发的 re-clamp 耦合——
- * 底部编辑时弹键盘把 scrollY 推大，收键盘后视口复原、re-clamp 却把 scrollY 夹到「含留白」的上界，导致末行下方残留一块空白。
- * 若要恢复底部留白，需改成「只在主动拖到最底部时可达、IME/缩放的自动夹回一律 settle 到自然底（末行贴底）」的双上界方案。
+ * 底部可滚过文末的留白（视口高比例）：允许主动滚动把末行上移、下方留空，不把末行钉死底边。
+ * 双上界避免历史坑：留白只并进「主动滚动/渲染/命中」用的 maxScrollY；所有**自动 settle**（IME 收键盘 re-clamp、
+ * keep-in-view、缩放提交的 re-clamp）走不含留白的 maxScrollYSettle（自然底、末行贴底）。否则底部弹键盘把 scrollY
+ * 推大、收键盘后 re-clamp 夹到含留白上界，会在末行下方残留一块空白。0.2 = 末行最多上移到距底 1/5 视口。
  */
-private const val BOTTOM_SCROLL_PAD_FRACTION = 0f
+private const val BOTTOM_SCROLL_PAD_FRACTION = 0.2f
 
 /**
  * layoutFor 逐行缓存条目。[validatedVersion] 记「上次确认与文档一致时的 buffer.version」：命中且版本相等即
@@ -326,19 +326,26 @@ fun CodeEditor(
     }
 
     val contentHeight = (if (softWrap) rowIndex.totalRows() else lineCount) * lineHeightPx
-    // 底部留白（连续式）：允许滚过文末一段（末行可上移、下方留空，不把末行钉死底边）。用
-    // `(内容高 − 视口高 + 留白).coerceAtLeast(0)` 而非「溢出才加」的分段——后者在「刚好放得下↔刚溢出」临界点会让
-    // maxScrollY 从 0 猛跳到留白值，令缩放到该临界字号时底部空间突变、松手跳一下；连续式使临界平滑、焦点滚动量落在
-    // 钳制范围内不被夹回。缩放预览纵向只钳顶部、不依赖此留白；缩放越界的底部由此 re-clamp 收拢。
+    // 两个纵向上界（见 [BOTTOM_SCROLL_PAD_FRACTION]）：maxScrollY 含底部留白，供**主动滚动/渲染/命中/缩放预览**
+    // （可滚过文末、末行上移下方留空）；maxScrollYSettle 是不含留白的自然底（末行贴底），仅供**视口变大时的 settle**
+    // （收键盘/转屏变高）夹回贴底、不残留留白。留白用连续式 `(内容高−视口+留白).coerceAtLeast(0)`（非「溢出才加」的分段）：
+    // 临界字号平滑、焦点滚动量落钳制内不被夹回。缩放预览的纵向上界同样含留白（与提交 re-clamp 同式 ⇒ 松手不跳、起手不 snap）。
     val bottomScrollPadPx = viewportHeight * BOTTOM_SCROLL_PAD_FRACTION
     val maxScrollY = (contentHeight - viewportHeight + bottomScrollPadPx).coerceAtLeast(0f)
+    val maxScrollYSettle = (contentHeight - viewportHeight).coerceAtLeast(0f)
     val maxScrollX = if (softWrap) 0f else (gutterWidthPx + padXPx * 2 + widestSeen[0] - viewportWidth).coerceAtLeast(0f)
 
     // 视口变大 / 内容变短使 maxScroll 缩小时，把滚动量夹回范围内。否则在文档底部弹出输入法（视口被 imePadding
     // 压小、scrollY 被 keep-in-view 推大）后收起输入法，视口复原、maxScrollY 骤减，而 scrollY 残留旧大值：
     // firstVisibleLine 读未夹的 scrollY 会指到更靠下的行，绘制偏移却读已夹的 scrollY，二者错位 → 上方留空白。
-    LaunchedEffect(maxScrollY, maxScrollX) {
-        scrollY = scrollY.coerceIn(0f, maxScrollY)
+    // 视口「变大」（收键盘 / 转屏变高）→ 夹到自然底 maxScrollYSettle（末行贴底、不残留留白，修 IME 收键盘留白）；
+    // 其余（缩放/编辑改内容高、弹键盘缩小视口）→ 夹到含留白的 maxScrollY，**缩放/编辑不夹掉主动滚入的底部留白、不跳**。
+    // 按「上一帧视口高」判定「变大」，确定性、不依赖 effect 执行顺序。主动滚动不改这些 key、不触发本效应，留白得以保持。
+    val prevViewportH = remember { floatArrayOf(0f) }
+    LaunchedEffect(maxScrollY, maxScrollX, viewportHeight) {
+        val grew = viewportHeight > prevViewportH[0]
+        prevViewportH[0] = viewportHeight
+        scrollY = scrollY.coerceIn(0f, if (grew) maxScrollYSettle else maxScrollY)
         scrollX = scrollX.coerceIn(0f, maxScrollX)
     }
 
@@ -353,7 +360,7 @@ fun CodeEditor(
         val col = ap.column.coerceIn(0, engine.buffer.lineLength(ap.line))
         val vr = layout.getLineForOffset(col) // 锚字符所在视觉行（新字号 layout）
         val anchorRowTopY = lineTopPx(ap.line) + layout.getLineTop(vr) // 该折行顶在内容坐标里的 y
-        scrollY = anchorRowTopY.coerceIn(0f, maxScrollY) // 令其回到视口顶 (screenY=0)
+        scrollY = anchorRowTopY.coerceIn(0f, maxScrollY) // 回到视口顶 (screenY=0)；上界含留白，缩放不夹掉主动滚入的留白
     }
 
     // 二维自由平移：跟手拖动时横纵可斜向同时滚（而非被锁在单轴——两个正交的单轴 scrollable 会在拖动起始按
@@ -589,7 +596,8 @@ fun CodeEditor(
     }
     // 手势闭包 key=Unit、不随重组重启，会按值捕获闭包。用 rememberUpdatedState 让它每次调「当前帧」的 commitZoom
     // （内含最新 softWrap / lineTopPx / layoutFor / liveMaxScroll），避开 stale-capture（与 positionAtLive 同理）。
-    val commitZoomLive = rememberUpdatedState<(Float, Float, Float, Float) -> Unit> { fontStart, s, tx, ty -> commitZoom(fontStart, s, tx, ty) }
+    val commitZoomLive =
+        rememberUpdatedState<(Float, Float, Float, Float) -> Unit> { fontStart, s, tx, ty -> commitZoom(fontStart, s, tx, ty) }
 
     // 选区拖拽到视口上/下/左/右热区时，按帧持续纵横滚动并同步延伸选区；速度随进入热区的深度线性增大。
     // 词锚（长按选词）按词粒度扩展、字符锚（手柄端点）按字符扩展。
@@ -737,7 +745,12 @@ fun CodeEditor(
                                     prevCentroid = c // 首个稳定双指中点：仅确立增量基准，本帧不动变换（避免「新落指帧中点=单指」的首帧大跳）
                                 } else {
                                     // 逐帧增量累积到**自由**平移 freeTx/Ty：绕当前中点缩放 ez（撞字号界 ez→1、仍可平移）+ 中点位移 → T'=ez·T+(c−ez·prevC)。
-                                    val newScale = ZoomMath.clampScaleToFontRange(previewScale * event.calculateZoom(), fontStart, ZOOM_MIN_SP, ZOOM_MAX_SP)
+                                    val newScale = ZoomMath.clampScaleToFontRange(
+                                        previewScale * event.calculateZoom(),
+                                        fontStart,
+                                        ZOOM_MIN_SP,
+                                        ZOOM_MAX_SP
+                                    )
                                     val ez = if (previewScale > 0f) newScale / previewScale else 1f
                                     if (!softWrap) freeTx = ez * freeTx + (c.x - ez * prevCentroid.x) // 换行钉左：freeTx 恒 0
                                     freeTy = ez * freeTy + (c.y - ez * prevCentroid.y)
@@ -751,7 +764,8 @@ fun CodeEditor(
                                         val maxSX = (newScale * liveContentWidth.value - vw).coerceAtLeast(0f)
                                         previewTx = newScale * scrollX - (newScale * scrollX - freeTx).coerceIn(0f, maxSX)
                                     }
-                                    val maxSY = (newScale * liveContentHeight.value - vh).coerceAtLeast(0f)
+                                    // 纵向上界含底部留白（vh 实时读、不 stale）：预览可停在留白里，与提交 re-clamp 的 maxScrollY 同式 ⇒ 起手不 snap、松手不跳。
+                                    val maxSY = (newScale * liveContentHeight.value - vh + vh * BOTTOM_SCROLL_PAD_FRACTION).coerceAtLeast(0f)
                                     previewTy = newScale * scrollY - (newScale * scrollY - freeTy).coerceIn(0f, maxSY)
                                 }
                             }
@@ -774,7 +788,9 @@ fun CodeEditor(
                                     val d = p.position - panLast
                                     if (!panActive) {
                                         // 距 commit 基准累积（未越 slop 前不更新 panLast）；越档后从当前位置起算、丢弃 slop 内位移。
-                                        if (d.getDistance() > viewConfiguration.touchSlop) { panActive = true; panLast = p.position }
+                                        if (d.getDistance() > viewConfiguration.touchSlop) {
+                                            panActive = true; panLast = p.position
+                                        }
                                     } else {
                                         scrollX = (scrollX - d.x).coerceIn(0f, liveMaxScrollX.value)
                                         scrollY = (scrollY - d.y).coerceIn(0f, liveMaxScrollY.value)
@@ -970,13 +986,17 @@ fun CodeEditor(
                             var lastHaptic = engine.caret
                             caretDragPos = Offset(slop.position.x, slop.position.y + grabDy)
                             engine.setCursor(mapped(slop.position))
-                            if (engine.caret != lastHaptic) { haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove); lastHaptic = engine.caret }
+                            if (engine.caret != lastHaptic) {
+                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove); lastHaptic = engine.caret
+                            }
                             caretDragActive = true
                             handleDragActive = true
                             drag(down.id) { change ->
                                 caretDragPos = Offset(change.position.x, change.position.y + grabDy)
                                 engine.setCursor(mapped(change.position))
-                                if (engine.caret != lastHaptic) { haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove); lastHaptic = engine.caret }
+                                if (engine.caret != lastHaptic) {
+                                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove); lastHaptic = engine.caret
+                                }
                                 change.consume()
                             }
                             caretDragActive = false
@@ -1001,11 +1021,15 @@ fun CodeEditor(
                             // （setSelection 的 head，已 clamp）。lastHaptic 初值为抓取的端点位置。
                             var lastHaptic = grabbed
                             engine.setSelection(a, mapped(slop.position))
-                            if (engine.caret != lastHaptic) { haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove); lastHaptic = engine.caret }
+                            if (engine.caret != lastHaptic) {
+                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove); lastHaptic = engine.caret
+                            }
                             drag(down.id) { change ->
                                 selectionDragPos = Offset(change.position.x, change.position.y + grabDy)
                                 engine.setSelection(a, mapped(change.position))
-                                if (engine.caret != lastHaptic) { haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove); lastHaptic = engine.caret }
+                                if (engine.caret != lastHaptic) {
+                                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove); lastHaptic = engine.caret
+                                }
                                 change.consume()
                             }
                             selectionDragPos = null

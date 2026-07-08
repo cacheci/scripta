@@ -71,7 +71,9 @@ class ZoomMathTest {
     @Test
     fun previewVerticalClampsBottomToPadding() {
         // 滚过文末以触发底部钳制（scaledScrollTop 撞 scaledMax）：末行下方恰留 bottomPad。
-        val vh = 800f; val ch = 850f; val pad = 100f
+        val vh = 800f;
+        val ch = 850f;
+        val pad = 100f
         val t = ZoomMath.previewVerticalTransform(1000f, 400f, 1f, vh, ch, pad)
         val vTranslate = t[0]
         // 末行（内容 y=ch）屏幕 y = 1·(ch − scrollY) + vTranslate 应 = vh − pad。
@@ -81,7 +83,8 @@ class ZoomMathTest {
     @Test
     fun previewVerticalBandEndpointsMapToViewportEdges() {
         val t = ZoomMath.previewVerticalTransform(300f, 250f, 1.7f, 900f, 8000f, 200f)
-        val vTranslate = t[0]; val s = 1.7f
+        val vTranslate = t[0];
+        val s = 1.7f
         assertEquals(0f, s * t[1] + vTranslate, 1e-2f)
         assertEquals(900f, s * t[2] + vTranslate, 1e-2f)
     }
@@ -109,7 +112,9 @@ class ZoomMathTest {
     @Test
     fun previewHorizontalClampsRightToPadding() {
         // 横滚过右端以触发右侧钳制：右缘内容恰停在 viewportWidth − rightPad。
-        val vw = 500f; val cw = 600f; val pad = 50f
+        val vw = 500f;
+        val cw = 600f;
+        val pad = 50f
         val h = ZoomMath.previewHorizontalTranslate(1000f, 400f, 1f, vw, cw, pad)
         assertEquals(vw - pad, 1f * (cw - 1000f) + h, 1e-2f)
     }

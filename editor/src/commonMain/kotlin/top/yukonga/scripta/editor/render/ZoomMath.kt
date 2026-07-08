@@ -1,5 +1,12 @@
 package top.yukonga.scripta.editor.render
 
+import top.yukonga.scripta.editor.render.ZoomMath.commitFontSize
+import top.yukonga.scripta.editor.render.ZoomMath.commitScrollNoWrap
+import top.yukonga.scripta.editor.render.ZoomMath.previewHorizontalTranslate
+import top.yukonga.scripta.editor.render.ZoomMath.previewVerticalTransform
+import top.yukonga.scripta.editor.render.ZoomMath.provisionalScrollYWrap
+
+
 /**
  * 双指缩放的纯数学，与 Compose 无关、便于单测。核心思想 = 图片缩放：**手势期显示的就是最终状态**，靠「统一的四方向钳制」
  * 做到完全不跳。手势期由 [previewVerticalTransform] / [previewHorizontalTranslate] 把连续系数换成 draw 阶段的两轴变换
