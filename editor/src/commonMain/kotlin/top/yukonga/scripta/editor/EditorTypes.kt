@@ -51,5 +51,19 @@ data class EditorColors(
             selection = Color(0x553A6DA0),
             handle = Color(0xFF277AF7),
         )
+
+        /** Light counterpart to [Default]; same field set, tuned for a white background. */
+        val Light: EditorColors = EditorColors(
+            background = Color(0xFFFFFFFF),
+            foreground = Color(0xFF1F1F1F),
+            gutterBackground = Color(0xFFF3F3F3),
+            gutterForeground = Color(0xFF9AA0A6),
+            cursor = Color(0xFF1F1F1F),
+            selection = Color(0x553B82F6),
+            handle = Color(0xFF277AF7),
+            symbolBarBackground = Color(0xFFECECEC),
+            symbolBarForeground = Color(0xFF3C3C3C),
+            symbolBarPressed = Color(0x14000000),
+        )
     }
 }

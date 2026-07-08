@@ -13,6 +13,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
@@ -26,6 +27,7 @@ import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.text.BasicText
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -38,10 +40,12 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.view.WindowCompat
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import top.yukonga.scripta.editor.CodeEditor
+import top.yukonga.scripta.editor.EditorColors
 import top.yukonga.scripta.editor.EditorLanguage
 import top.yukonga.scripta.editor.LineNumberMode
 import top.yukonga.scripta.editor.rememberCodeEditorController
@@ -62,6 +66,28 @@ class MainActivity : ComponentActivity() {
             var readOnly by remember { mutableStateOf(false) }
             var lineNumberMode by remember { mutableStateOf(LineNumberMode.PinnedToScreen) }
             var openedName by remember { mutableStateOf<String?>(null) }
+
+            // 主题：默认跟随系统，工具栏「主题」按钮可手动覆盖（覆盖后固定，直到再点回另一档）。
+            val systemDark = isSystemInDarkTheme()
+            var darkOverride by remember { mutableStateOf<Boolean?>(null) }
+            val dark = darkOverride ?: systemDark
+            val editorColors = if (dark) EditorColors.Default else EditorColors.Light
+            // 系统栏图标明暗随主题：浅色底用深色图标、深色底用浅色图标（工具栏/编辑器底色铺进状态栏/导航栏）。
+            LaunchedEffect(dark) {
+                val bars = WindowCompat.getInsetsController(window, window.decorView)
+                bars.isAppearanceLightStatusBars = !dark
+                bars.isAppearanceLightNavigationBars = !dark
+            }
+            // 工具栏/窗口配色随主题（正文/gutter/符号条等编辑器配色走 editorColors）。
+            val cWindow = if (dark) Color(0xFF1E1E1E) else Color(0xFFFFFFFF)
+            val cBar = if (dark) Color(0xFF2D2D30) else Color(0xFFECECEC)
+            val cOpen = if (dark) Color(0xFF56A3F5) else Color(0xFF1A73E8)
+            val cSample = if (dark) Color(0xFFE0E0E0) else Color(0xFF3C3C3C)
+            val cWrap = if (dark) Color(0xFF6FCF97) else Color(0xFF2E9E5B)
+            val cReadOnly = if (dark) Color(0xFFE0A458) else Color(0xFFC77A17)
+            val cLineNo = if (dark) Color(0xFFB39DDB) else Color(0xFF7E57C2)
+            val cTheme = if (dark) Color(0xFFF48FB1) else Color(0xFFC2185B)
+            val cName = if (dark) Color(0xFF858585) else Color(0xFF6B6B6B)
 
             val context = LocalContext.current
             val scope = rememberCoroutineScope()
@@ -101,12 +127,12 @@ class MainActivity : ComponentActivity() {
             Column(
                 Modifier
                     .fillMaxSize()
-                    .background(Color(0xFF1E1E1E))
+                    .background(cWindow)
             ) {
                 Row(
                     Modifier
                         .fillMaxWidth()
-                        .background(Color(0xFF2D2D30))
+                        .background(cBar)
                         // 工具栏底色铺进状态栏，内容下移让开状态栏
                         .windowInsetsPadding(
                             WindowInsets.statusBars
@@ -117,12 +143,12 @@ class MainActivity : ComponentActivity() {
                 ) {
                     BasicText(
                         text = "  打开  ",
-                        style = TextStyle(color = Color(0xFF56A3F5), fontSize = 13.sp),
+                        style = TextStyle(color = cOpen, fontSize = 13.sp),
                         modifier = Modifier.clickable { openDocument.launch(arrayOf("*/*")) },
                     )
                     BasicText(
                         text = "  示例  ",
-                        style = TextStyle(color = Color(0xFFE0E0E0), fontSize = 13.sp),
+                        style = TextStyle(color = cSample, fontSize = 13.sp),
                         modifier = Modifier.clickable {
                             text = SAMPLE_YAML
                             language = EditorLanguage.Yaml
@@ -131,17 +157,17 @@ class MainActivity : ComponentActivity() {
                     )
                     BasicText(
                         text = if (wrap) "  换行: 开  " else "  换行: 关  ",
-                        style = TextStyle(color = Color(0xFF6FCF97), fontSize = 13.sp),
+                        style = TextStyle(color = cWrap, fontSize = 13.sp),
                         modifier = Modifier.clickable { wrap = !wrap },
                     )
                     BasicText(
                         text = if (readOnly) "  只读: 开  " else "  只读: 关  ",
-                        style = TextStyle(color = Color(0xFFE0A458), fontSize = 13.sp),
+                        style = TextStyle(color = cReadOnly, fontSize = 13.sp),
                         modifier = Modifier.clickable { readOnly = !readOnly },
                     )
                     BasicText(
                         text = if (lineNumberMode == LineNumberMode.PinnedToScreen) "  行号: 固定  " else "  行号: 跟随  ",
-                        style = TextStyle(color = Color(0xFFB39DDB), fontSize = 13.sp),
+                        style = TextStyle(color = cLineNo, fontSize = 13.sp),
                         modifier = Modifier.clickable {
                             lineNumberMode = if (lineNumberMode == LineNumberMode.PinnedToScreen) {
                                 LineNumberMode.PinnedToLine
@@ -150,11 +176,16 @@ class MainActivity : ComponentActivity() {
                             }
                         },
                     )
+                    BasicText(
+                        text = if (dark) "  主题: 深  " else "  主题: 浅  ",
+                        style = TextStyle(color = cTheme, fontSize = 13.sp),
+                        modifier = Modifier.clickable { darkOverride = !dark },
+                    )
                     // 已打开的文件名占满剩余宽度、单行省略，绝不把上面的按钮挤出屏幕。
                     openedName?.let {
                         BasicText(
                             text = it,
-                            style = TextStyle(color = Color(0xFF858585), fontSize = 13.sp),
+                            style = TextStyle(color = cName, fontSize = 13.sp),
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                             softWrap = false,
@@ -168,6 +199,7 @@ class MainActivity : ComponentActivity() {
                     controller = controller,
                     initialText = text,
                     language = language,
+                    colors = editorColors,
                     softWrap = wrap,
                     readOnly = readOnly,
                     lineNumberMode = lineNumberMode,
