@@ -1,6 +1,5 @@
 package top.yukonga.scripta.editor
 
-import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -129,6 +128,17 @@ private const val BOTTOM_SCROLL_PAD_FRACTION = 0.2f
 private class CachedLayout(var validatedVersion: Int, val content: String, val layout: TextLayoutResult)
 
 /**
+ * isNarrowLine 逐行缓存条目（与 [CachedLayout] 同法失效，但只存「长度+hash 指纹」而非整行内容——网格路专治
+ * 超长行，把整串钉在缓存里会为单条巨行长期占用兆字节）。[narrow] = 该行是否全为可打印 ASCII（等宽半角），
+ * 即能否走网格快路；含 CJK/全角/emoji 等非等宽字形时为 false，令该长行退回整行 shaping。
+ */
+private class NarrowFlag(var validatedVersion: Int, val length: Int, val hash: Int, val narrow: Boolean)
+
+/** 网格快路要求的「窄行」判定：全部为可打印 ASCII（U+0020..U+007E，等宽半角）。含任何 CJK/全角/emoji/制表符
+ *  等宽度≠charW 或竖直度量异于 ASCII 的字符即返回 false——保守但安全，误判只是让该长行退回 shaping、不影响正确性。 */
+private fun isNarrowGridText(s: String): Boolean = s.all { it.code in 0x20..0x7E }
+
+/**
  * 虚拟化代码编辑器入口。自绘 + 视口虚拟化 + 自管 IME（Android），不使用 BasicTextField。
  *
  * **底部系统栏（导航栏 / 键盘）由编辑器内部消费**，宿主不要再对编辑器加 `imePadding()`/导航栏 padding
@@ -139,7 +149,6 @@ private class CachedLayout(var validatedVersion: Int, val content: String, val l
  * [symbols] 非空且非只读时在底部常驻一条横向可滚的符号快捷条，文本视口相应缩小、文本浮于其上。
  * 传 `emptyList()` 关闭；只读时不显示。
  */
-@OptIn(ExperimentalFoundationApi::class) // scrollable2D / rememberScrollable2DState 仍为实验 API
 @Composable
 fun CodeEditor(
     controller: CodeEditorController,
@@ -223,14 +232,39 @@ fun CodeEditor(
     // 英数位置恒定（加删中文不跳）、CJK 落在自然偏下位置不上飘。绘制顶 = 行顶 + (refBaselinePx − 本行 firstBaseline)。
     val refBaselinePx = remember(textStyle) { measurer.measure("Ag中", textStyle).firstBaseline }
 
-    // M2：等宽字符宽 + 超长「网格行」判定。超阈值的行不整行 shaping，只按可见列窗口做等宽算术定位/绘制
-    // （仅不换行；softWrap 下仍走整行折行测量）。charW = 参考字符 "0" 的 advance；垂直度量复用其 cursorRect。
-    val charWpx = remember(textStyle) { measurer.measure("0", textStyle).size.width.toFloat() }
+    // M2：超长「网格行」判定 + 等宽字符宽。超阈值的行不整行 shaping，只按可见列窗口做等宽算术定位/绘制
+    // （仅不换行；softWrap 下仍走整行折行测量）。gridRef = 参考字符 "0" 的 layout：垂直度量复用其 cursorRect(0)。
+    // charW 取其**精确子像素 advance**（末端光标 x = cursorRect(1).left），不用 size.width——那是整数取整的盒宽。
+    // 网格行用 col*charW 定位光标/命中/切片原点，而切片文本按真实 advance 排布；用取整宽会逐列累积漂移
+    // （每字差零点几像素），长行右段光标与字形明显错位、点选/编辑落到隔壁列。取真实 advance 后三者与字形同尺。
     val gridRef = remember(textStyle) { measurer.measure("0", textStyle) }
+    val charWpx = remember(gridRef) { gridRef.getCursorRect(1).left }
     val gridRefBaseline = gridRef.firstBaseline
     val gridRefCursor = remember(gridRef) { gridRef.getCursorRect(0) }
+    // 网格快路仅适用「窄行」（全为可打印 ASCII、等宽半角）：其等宽算术 col*charW 与 ASCII 基线 gridRefBaseline
+    // 只有在此前提下才成立。含 CJK/全角/emoji 的长行——字形非等宽（横向漂移）、度量非 ASCII（竖直错位）——据此
+    // 退回整行 shaping（layoutFor），走与普通行相同的精确 layout（光标/命中/CJK 基线对齐都对）。是否窄行按行缓存、
+    // version 未变即命中；编辑后按「长度+hash 指纹」重校（不把整行内容留在缓存里）。含 CJK 的超长行退回 shaping 会整行重测，属罕见代价。
+    val narrowCache = remember { LruCache<Int, NarrowFlag>(256) }
+    fun isNarrowLine(line: Int): Boolean {
+        val version = engine.buffer.version
+        val cached = narrowCache[line]
+        if (cached != null && cached.validatedVersion == version) return cached.narrow
+        val content = engine.buffer.lineText(line)
+        // 指纹（长度+hash）相符即视作未变、刷新版本戳复用结果：省下把整行内容长期钉在缓存里。同长且同 hash 的
+        // 不同内容概率可忽略，即便撞上也只是本行一次错判、下次真实编辑（指纹必变）即纠正。
+        if (cached != null && cached.length == content.length && cached.hash == content.hashCode()) {
+            cached.validatedVersion = version
+            return cached.narrow
+        }
+        val narrow = isNarrowGridText(content)
+        narrowCache[line] = NarrowFlag(version, content.length, content.hashCode(), narrow)
+        return narrow
+    }
+
+    // 长度先短路：短行不进 isNarrowLine、不触发整行读取，只有超阈值的长行才判窄。
     fun isGridLine(line: Int): Boolean =
-        !softWrap && charWpx > 0f && engine.buffer.lineLength(line) > LONG_LINE_THRESHOLD
+        !softWrap && charWpx > 0f && engine.buffer.lineLength(line) > LONG_LINE_THRESHOLD && isNarrowLine(line)
 
     // 读取 buffer.version（快照 state）订阅编辑：内容/行数变化后整体重组，gutter 宽、内容高、可见窗口随之
     // 刷新。此读取本身即订阅，勿删。逐行 layout 缓存不再以它失效（否则每键整表重测），失效见 layoutFor。
