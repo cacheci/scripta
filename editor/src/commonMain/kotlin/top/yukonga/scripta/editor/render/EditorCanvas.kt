@@ -71,11 +71,11 @@ private fun buildTeardropPath(tipX: Float, tipY: Float, ux: Float, uy: Float, r:
  * 超长「网格行」（[isGridLine] 为真）不整行 shaping：只测量/绘制落在视口内的可见列窗口切片，几何（光标/
  * 选区/手柄）用等宽算术（[charW] + 参考字符垂直度量 [gridRefBaseline]/[gridRefCursorTop]/[gridRefCursorBottom]）。
  *
- * 双指缩放预览（[previewScale] != 1f）：draw 阶段做「真·焦点缩放」——**正文**绕双指焦点 ([previewFocalX],[previewFocalY])
- * 两轴缩放（焦点左侧正文左移滑到 gutter 后/移出、上方内容上移、焦点处停在指下）；**gutter/行号**横向钉左（只随字号缩放、
- * 不横移）、纵向与正文一致。字号未变、layout 未重排，Skia 按缩放后度量重栅格化 → 文字清晰、零重排；缩小时可见带外扩、
- * [firstVisibleLine] 传入外扩量补齐露出的行。**四方向就地钳制**（[contentHeightPx]/[bottomPaddingPx] 纵向、
- * [contentWidthPx]/[rightPaddingPx] 横向），与松手 commitZoom 的 re-clamp 同一连续式 ⇒ 预览即最终态、松手不跳（图片缩放模型）。
+ * 双指缩放预览（[previewScale] != 1f）：draw 阶段用运行态仿射 (s=[previewScale], tx=[previewTx], ty=[previewTy]) 变换正文——
+ * screenX = s·px + tx、screenY = s·py + ty。手势由上层「绕当前双指中点缩放 + 中点位移平移」逐帧增量累积 → **四向自由跟手**；
+ * **gutter/行号**横向钉左（tx 恒 0、只随字号缩放、不横移），纵向与正文一致（同 ty）。字号未变、layout 未重排，Skia 按缩放后度量
+ * 重栅格化 → 文字清晰、零重排；缩小 / 平移使可见带外扩时 [firstVisibleLine] 传入外扩量补齐露出的行。变换可越界（进空白），
+ * rubber-band / 松手 settle 由上层处理，本层不钳制。松手 commitZoom 把 (s,tx,ty) 折进真实 scroll（自相似 + TextMotion ⇒ 逐像素接续）。
  */
 @Composable
 fun EditorCanvas(
@@ -102,12 +102,8 @@ fun EditorCanvas(
     gridRefCursorTop: Float,
     gridRefCursorBottom: Float,
     previewScale: () -> Float = { 1f },
-    previewFocalX: () -> Float = { 0f },
-    previewFocalY: () -> Float = { 0f },
-    contentHeightPx: () -> Float = { 0f },
-    bottomPaddingPx: Float = 0f,
-    contentWidthPx: () -> Float = { 0f },
-    rightPaddingPx: Float = 0f,
+    previewTx: () -> Float = { 0f },
+    previewTy: () -> Float = { 0f },
     modifier: Modifier = Modifier,
 ) {
     // 行号 layout 缓存：行号只依赖行下标与 numberStyle，draw 里逐帧重测会击穿 TextMeasurer 仅 8 条的
@@ -128,18 +124,14 @@ fun EditorCanvas(
         // 在 draw 阶段读取滚动量：滚动只触发本画布重绘，不再让上层每滚 1px 重组。
         val sX = scrollX()
         val sY = scrollY()
-        // 缩放预览也在 draw 阶段读：previewScale 每事件变、仅使本画布重绘（零重组/零重排）。scale==1 时下面全式退化为原状。
+        // 缩放预览的运行态仿射在 draw 阶段读：previewScale/previewTx/previewTy 每事件变、仅重绘（零重组/零重排）。(1,0,0) 时退化为原状。
+        // screenX = s·px + hTranslateText、screenY = s·py + vTranslate（px/py 为相对 sX/sY 的内容坐标）。四向自由跟手由上层逐帧累积
+        // （可越界，rubber-band / 松手 settle 在上层做）→ 本层不钳制、直接用。
         val s = previewScale()
-        val fy = previewFocalY()
-        // 纵向变换：绕焦点缩放、上下都钳到 [0, s·内容高 − 视口高 + 底部留白]（与 maxScrollY 同式）。放大时焦点上方内容自由
-        // 上移不锁顶、到底钳住不越界；预览即最终态 → 松手不跳。
-        val vt = ZoomMath.previewVerticalTransform(sY, fy, s, size.height, contentHeightPx(), bottomPaddingPx)
-        val vTranslate = vt[0] // 纵向平移（屏幕 px）：screenY = s·py + vTranslate
-        val preTop = vt[1] // 可见带上界（预缩放屏幕 y）：缩小时 < 0，用作循环起点与可见判定基准
-        val preBottom = vt[2] // 可见带下界：缩小时 > size.height，用作循环终止边界（over-draw）
-        // 正文横向变换：绕焦点缩放、左右都钳到 [0, s·内容宽 − 视口宽 + 右侧留白]（与 maxScrollX 同式）。焦点左侧正文左移滑到
-        // gutter 后/移出、到右缘钳住；换行由上层传 focalX=0 → 钉左。预览即最终态 → 松手不跳。
-        val hTranslateText = ZoomMath.previewHorizontalTranslate(sX, previewFocalX(), s, size.width, contentWidthPx(), rightPaddingPx)
+        val hTranslateText = previewTx()
+        val vTranslate = previewTy()
+        val preTop = -vTranslate / s // 可见带上界（预缩放屏幕 y）：由 screenY=0 反解 py = −vTranslate/s，作循环起点/可见判定基准
+        val preBottom = (size.height - vTranslate) / s // 可见带下界：由 screenY=size.height 反解，作循环终止边界（over-draw）
         // 当前行整行高亮的预缩放矩形：经横向变换 screenX=s·px+hTranslateText 后仍铺满视口宽 [0, size.width]——否则缩小(s<1)时
         // 直接用 size.width 会被 s 缩窄、右侧铺不满（「高亮不到底」）。s==1 时 hlLeft=0、hlWidth=size.width，与原状一致。
         val hlLeft = -hTranslateText / s
