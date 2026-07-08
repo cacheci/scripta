@@ -496,6 +496,7 @@ fun MagnifierOverlay(
     layoutFor: (Int) -> TextLayoutResult?,
     textMeasurer: TextMeasurer,
     textStyle: TextStyle,
+    numberStyle: TextStyle,
     charW: Float,
     isGridLine: (Int) -> Boolean,
     gridRefBaseline: Float,
@@ -700,6 +701,22 @@ fun MagnifierOverlay(
                                     }
                                 }
                                 ln++
+                            }
+                            // 行号 gutter（编辑器局部坐标 = 主画布屏幕坐标，随内容一同放大）：正文之后铺不透明底色条 [0, gutterWidth]、
+                            // 行号右对齐、基线对齐正文基线——与主画布同式。画在正文之后 ⇒ 横滚时盖住滚进 gutter 区的正文。放大镜是绕光标
+                            // 的窗口，仅光标靠行首时 gutter 落入镜窗、自然可见（滚到行中时 gutter 在窗外、不画，符合「放大邻域」语义）。
+                            run {
+                                val gTop = lineTopPx(first) - sY
+                                val gBot = lineTopPx(last) - sY + lineHeightPx
+                                drawRect(colors.gutterBackground, topLeft = Offset(0f, gTop), size = Size(gutterWidthPx, gBot - gTop))
+                                var gln = first
+                                while (gln <= last) {
+                                    val lt = lineTopPx(gln) - sY
+                                    val num = textMeasurer.measure((gln + 1).toString(), numberStyle)
+                                    val numTop = lt + (refBaselinePx - num.firstBaseline)
+                                    drawText(num, color = colors.gutterForeground, topLeft = Offset(gutterWidthPx - padXPx - num.size.width, numTop))
+                                    gln++
+                                }
                             }
                             // 光标线：仅空选区（拖光标手柄）时画，且随 blink（caretVisible）闪烁；有选区（拖端点）时不画、端点由选区边缘体现。
                             if (sel.isEmpty && caretVisible()) {

@@ -1178,6 +1178,7 @@ fun CodeEditor(
                 layoutFor = ::layoutFor,
                 textMeasurer = measurer,
                 textStyle = textStyle,
+                numberStyle = numberStyle,
                 charW = charWpx,
                 isGridLine = ::isGridLine,
                 gridRefBaseline = gridRefBaseline,
