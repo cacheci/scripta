@@ -62,8 +62,6 @@ class MainActivity : ComponentActivity() {
             var readOnly by remember { mutableStateOf(false) }
             var lineNumberMode by remember { mutableStateOf(LineNumberMode.PinnedToScreen) }
             var openedName by remember { mutableStateOf<String?>(null) }
-            var big by remember { mutableStateOf(false) } // false=默认示例，true=3MB 配置
-            val bigConfig = remember { bigYaml(20_000) }   // 生成一次，来回切换时复用
 
             val context = LocalContext.current
             val scope = rememberCoroutineScope()
@@ -91,7 +89,6 @@ class MainActivity : ComponentActivity() {
                         }
                         openedName = name
                         language = languageForName(name)
-                        big = false // 打开外部文件后，切换按钮回到「加载 3MB 配置」语义
                         text = content
                     } catch (e: Exception) {
                         Toast.makeText(context, "打开失败: ${e.message}", Toast.LENGTH_SHORT).show()
@@ -124,11 +121,10 @@ class MainActivity : ComponentActivity() {
                         modifier = Modifier.clickable { openDocument.launch(arrayOf("*/*")) },
                     )
                     BasicText(
-                        text = if (big) "  加载默认示例  " else "  加载 3MB 配置  ",
+                        text = "  示例  ",
                         style = TextStyle(color = Color(0xFFE0E0E0), fontSize = 13.sp),
                         modifier = Modifier.clickable {
-                            big = !big
-                            text = if (big) bigConfig else SAMPLE_YAML
+                            text = SAMPLE_YAML
                             language = EditorLanguage.Yaml
                             openedName = null
                         },
@@ -209,121 +205,35 @@ private fun languageForName(name: String?): EditorLanguage {
 }
 
 /**
- * 生成 ~3MB 的 Mihomo/Clash.Meta 风格配置（性能演示用）。所有 server 取自 RFC 5737 文档保留网段
- * （192.0.2.x / 198.51.100.x / 203.0.113.x）或 .invalid 域名，永不可路由；password/uuid/url 均为占位，
- * 不含任何真实连接。[nodes] 为生成的代理节点数（每节点约一行）。
+ * 默认示例：一篇覆盖常见 YAML 语法场景的配置，兼作编辑器各能力的演示（标量类型 / 嵌套 / 流式 / 锚点合并 /
+ * 多行串 / 国际化 / emoji / 长行）。尾部接一条超长单行（[longLineSample]，网格虚拟化）与几行普通内容。
  */
-private fun bigYaml(nodes: Int): String = buildString {
-    append(BIG_YAML_HEADER)
-    append("\n\nproxies:\n")
-    val regions = listOf(
-        "🇭🇰 香港" to "192.0.2",
-        "🇸🇬 新加坡" to "198.51.100",
-        "🇯🇵 日本" to "203.0.113",
-        "🇺🇸 美国" to "192.0.2",
-        "🇹🇼 台湾" to "198.51.100",
-        "🇰🇷 韩国" to "203.0.113",
-    )
-    for (i in 0 until nodes) {
-        val (region, net) = regions[i % regions.size]
-        val ip = "$net.${i % 254 + 1}"
-        val host = "node-$i.example.invalid"
-        val port = 10000 + i % 50000
-        val name = "$region 节点 ${(i + 1).toString().padStart(4, '0')}"
-        val uuid = "00000000-0000-4000-8000-${(i % 1_000_000_000_000L).toString().padStart(12, '0')}"
-        val line = when (i % 5) {
-            0 -> "  - {name: \"$name\", type: ss, server: $ip, port: $port, cipher: aes-256-gcm, password: \"example-pw-$i\", udp: true}"
-            1 -> "  - {name: \"$name\", type: vmess, server: $ip, port: $port, uuid: $uuid, alterId: 0, cipher: auto, udp: true}"
-            2 -> "  - {name: \"$name\", type: trojan, server: $host, port: $port, password: \"example-pw-$i\", sni: $host, skip-cert-verify: true, udp: true}"
-            3 -> "  - {name: \"$name\", type: vless, server: $ip, port: $port, uuid: $uuid, tls: true, network: ws, servername: $host, udp: true}"
-            else -> "  - {name: \"$name\", type: hysteria2, server: $host, port: $port, password: \"example-pw-$i\", sni: $host, up: \"50 Mbps\", down: \"200 Mbps\"}"
-        }
-        append(line); append('\n')
-    }
-    append('\n'); append(BIG_YAML_FOOTER); append('\n')
-}
-
-private val BIG_YAML_HEADER = """
-    # ===== Mihomo / Clash.Meta 示例配置 =====
-    # 仅用于编辑器演示：server 取自 RFC 5737 文档保留网段 / .invalid 域名，永不可路由；
-    # password / uuid / url 均为占位，无任何真实连接。
-
-    mixed-port: 7890
-    allow-lan: true
-    mode: rule
-    log-level: info
-    ipv6: true
-    unified-delay: true
-    tcp-concurrent: true
-    external-controller: 127.0.0.1:9090
-    global-client-fingerprint: chrome
-
-    profile:
-      store-selected: true
-      store-fake-ip: true
-
-    sniffer:
-      enable: true
-      sniff:
-        HTTP: {ports: [80, 8080-8880], override-destination: true}
-        TLS: {ports: [443, 8443]}
-        QUIC: {ports: [443, 8443]}
-
-    tun:
-      enable: true
-      stack: mixed
-      dns-hijack: ["any:53", "tcp://any:53"]
-      auto-route: true
-      auto-detect-interface: true
-
-    dns:
-      enable: true
-      ipv6: true
-      enhanced-mode: fake-ip
-      fake-ip-range: 198.18.0.1/16
-      fake-ip-filter: ["*.lan", "+.local", "time.*.com", "ntp.*.com"]
-      default-nameserver: [192.0.2.53, 198.51.100.53]
-      nameserver: ["https://dns.example.invalid/dns-query", "tls://dns.example.invalid"]
-      proxy-server-nameserver: ["https://doh.example.invalid/dns-query"]
-""".trimIndent()
-
-private val BIG_YAML_FOOTER = """
-    proxy-groups:
-      - {name: 节点选择, type: select, proxies: [自动选择, 香港自动, 日本自动, 美国自动, DIRECT]}
-      - {name: 自动选择, type: url-test, include-all: true, tolerance: 20, interval: 300, url: "https://cp.example.invalid/generate_204"}
-      - {name: 香港自动, type: url-test, include-all: true, interval: 300, filter: "(?i)香港|hk|hong ?kong"}
-      - {name: 日本自动, type: url-test, include-all: true, interval: 300, filter: "(?i)日本|jp|japan"}
-      - {name: 美国自动, type: url-test, include-all: true, interval: 300, filter: "(?i)美国|us|united states"}
-      - {name: 漏网之鱼, type: select, proxies: [节点选择, DIRECT]}
-
-    rules:
-      - GEOIP,private,DIRECT,no-resolve
-      - GEOSITE,category-ads-all,REJECT
-      - GEOSITE,cn,DIRECT
-      - GEOIP,CN,DIRECT
-      - DOMAIN-SUFFIX,example.invalid,节点选择
-      - MATCH,漏网之鱼
-""".trimIndent()
-
 private val SAMPLE_YAML = """
     # scripta — YAML 示例（覆盖常见语法场景）
+    # 「打开」载入本地文件，或直接编辑；双指缩放、长按选词、拖动手柄看放大镜、底部符号条一键插入。
     name: scripta
     version: 0.1.0
     released: 2026-07-06
     stable: true
-    maintainer: null                 # 空值(null)
+    maintainer: null                 # 空值：null / ~ / 留空 皆可
+    homepage: ~
 
     # 标量类型
     scalars:
       int: 42
+      negative: -17
       float: 3.14159
+      scientific: 6.022e23
       hex: 0x1F
-      bools: [true, false, yes, no]  # 流式列表
+      octal: 0o17
+      bools: [true, false, yes, no, on, off]   # 流式列表
+      timestamp: 2026-07-06T21:00:00Z
       quoted: "含 : 冒号与 # 井号的字符串"
       single: '单引号里用 '' 转义单引号'
       plain: 直接量字符串不需要引号
+      escaped: "制表\t 换行\n 转义序列"
 
-    # 嵌套映射 + 块状列表
+    # 嵌套映射 + 块状列表 + 列表套映射
     editor:
       virtualized: true
       language: yaml
@@ -332,7 +242,11 @@ private val SAMPLE_YAML = """
         - 视口虚拟化
         - 自管 IME(拼音 composing)
         - 软换行
+        - 超长行网格化
       gestures: {tap: 落光标, long_press: 选词, pinch: 双指缩放}
+      themes:
+        - {name: dark,  bg: "#1E1E1E", fg: "#E0E0E0"}
+        - {name: light, bg: "#FFFFFF", fg: "#1E1E1E"}
 
     # 锚点 & 引用 & 合并
     defaults: &defaults
@@ -356,14 +270,19 @@ private val SAMPLE_YAML = """
       成一行(换行变空格)
       最终是一段文本。
 
+    # 常用符号（底部符号条一键插入）
+    symbols: '{ } [ ] ( ) < > : = + - * / \ | & # _'
+
     # 国际化 / emoji / 长行
     i18n:
       中文: 输入测试(拼音 composing)
+      日本語: テスト入力
+      한국어: 입력 테스트
       emoji: "🇭🇰 🇯🇵 🇺🇸 😀 👨‍👩‍👧"
       long_line: 这是一行非常非常非常长的文本用来测试横向滚动与自动换行 aaaaaaaa bbbbbbbb cccccccc dddddddd eeeeeeee ffffffff gggggggg hhhhhhhh iiiiiiii jjjjjjjj
 """.trimIndent() + "\n" + longLineSample() + "\ntail:\n  a: 1\n  b: 2\n  c: 3\n"
 
-/** M2 超长行（网格虚拟化）测试用的一条 ~3500 字符单行，纯占位、不含真实数据（模拟压缩/生成代码的单行）。
+/** 超长行（网格虚拟化）测试用的一条 ~3500 字符单行，纯占位、不含真实数据（模拟压缩/生成代码的单行）。
  *  尾部再接几行普通内容（见上），让网格行位于文档中部，便于交互测试（点按/选词/光标随动）。 */
 private fun longLineSample(): String {
     val body = (0 until 250).joinToString(" ") { "tok$it=val$it" }
