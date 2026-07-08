@@ -36,7 +36,7 @@ private const val GRID_SLICE_QUANTUM = 32
 /**
  * 泪滴手柄路径：尖端 ([tipX],[tipY]) 贴光标底，body 圆（半径 [r]）沿单位向量 ([ux],[uy]) 从尖端向外下方悬挂，
  * 尖端到圆心距 [l]（须 > r，越大越尖）。两侧为「尖端到圆的切线」、外缘为圆的大弧，合成有尖角的水滴形。
- * 光标手柄尖朝正上、选区起点尖朝右上（body 左下）、终点尖朝左上（body 右下），即成熟编辑器的镜像对。
+ * 光标手柄尖朝正上、选区起点尖朝右上（body 左下）、终点尖朝左上（body 右下），起点/终点为镜像对。
  */
 private fun buildTeardropPath(tipX: Float, tipY: Float, ux: Float, uy: Float, r: Float, l: Float): Path {
     val cx = tipX + l * ux

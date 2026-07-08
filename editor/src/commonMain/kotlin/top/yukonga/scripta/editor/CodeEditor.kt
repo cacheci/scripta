@@ -94,7 +94,7 @@ private const val ZOOM_MAX_SP = 40f
  * 布局基准字号与派生量比例：行号字号 = 正文 × [NUMBER_FONT_SCALE]（默认 14sp→13sp）；横向内边距
  * padX = 正文 / [LAYOUT_BASE_FONT_SP] × [PAD_X_BASE_DP]（默认 14sp→8dp）。**关键**：用「比例」而非「常量偏移 / 固定 dp」，
  * 使 gutter 宽、内边距随字号线性缩放，整套布局在缩放下「自相似」——双指缩放预览（整体等比缩放）与松手重排（按新字号
- * 重新布局）产生一致几何，行号/正文在提交时不跳变、无重绘（成熟编辑器效果）；不换行提交横向亦简化为精确的 sX'=k·sX。
+ * 重新布局）产生一致几何，行号/正文在提交时不跳变、无重绘；不换行提交横向亦简化为精确的 sX'=k·sX。
  */
 private const val LAYOUT_BASE_FONT_SP = 14f
 private const val NUMBER_FONT_SCALE = 13f / 14f
@@ -321,7 +321,7 @@ fun CodeEditor(
     }
 
     val contentHeight = (if (softWrap) rowIndex.totalRows() else lineCount) * lineHeightPx
-    // 底部留白（连续式）：允许滚过文末一段（末行可上移、下方留空，观感对齐成熟编辑器、不把末行钉死底边）。用
+    // 底部留白（连续式）：允许滚过文末一段（末行可上移、下方留空，不把末行钉死底边）。用
     // `(内容高 − 视口高 + 留白).coerceAtLeast(0)` 而非「溢出才加」的分段——后者在「刚好放得下↔刚溢出」临界点会让
     // maxScrollY 从 0 猛跳到留白值，令缩放到该临界字号时底部空间突变、松手跳一下；连续式使临界平滑、焦点滚动量落在
     // 钳制范围内不被夹回。缩放预览纵向只钳顶部、不依赖此留白；缩放越界的底部由此 re-clamp 收拢。
@@ -636,7 +636,7 @@ fun CodeEditor(
             var stepX = edgeAutoScrollSpeed(pos.x, viewportWidth, lineHeightPx)
             // 横向自动滚只在光标还能沿**当前行**推进时才进行：到行尾（右）/行首（左）即停，不把视口滚进该行文本右侧的空白。
             // maxScrollX 是按最宽行算的全局上界；若当前行短（如 50 字符）而上下有更长行，全局 maxScrollX>0 会让 effect
-            // 误以为「右边还能滚」，于是滚进空白、光标却被 positionAt 钳在行尾不动。按当前行长度就地闸停，对齐成熟编辑器。
+            // 误以为「右边还能滚」，于是滚进空白、光标却被 positionAt 钳在行尾不动。按当前行长度就地闸停。
             // 并 gate maxX>0：maxX==0（softWrap 或无横向余量）时归零 stepX 也改不动 newX，跳过、免每帧 positionAtWithScroll/layoutFor。
             if (stepX != 0f && maxX > 0f) {
                 val cur = positionAtWithScroll(pos, scrollY, scrollX)
@@ -951,7 +951,7 @@ fun CodeEditor(
                         engine.setCursor(mapped(p)); pingCaretHandle()
                         // 先等真正拖动（越过 touchSlop）才进入重定位 + 边缘自动滚动；纯点按（按下即抬起、位移不过 slop）
                         // 只落光标、绝不激活自动滚动——否则光标本就靠边时，一按到边缘热区就被 caretDrag effect 当成「停在边缘」
-                        // 带着滚。成熟编辑器正是以位移阈值区分：点=只落光标永不滚，拖=才滚，且自动滚是「拖拽进行时」的属性。
+                        // 带着滚。以位移阈值区分：点=只落光标永不滚，拖=才滚，且自动滚是「拖拽进行时」的属性。
                         // caretDragPos 存已含 grabDy 的目标点（与 mapped 同源），供 effect 判热区并逐帧落光标、可拖到视口外内容。
                         val slop = awaitTouchSlopOrCancellation(down.id) { c, _ -> c.consume() }
                         if (slop != null) {
