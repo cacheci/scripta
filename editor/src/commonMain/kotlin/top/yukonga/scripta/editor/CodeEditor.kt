@@ -202,9 +202,9 @@ fun CodeEditor(
     // 拖动手柄半径与命中外扩（细光标线太小，靠 slop 放大可抓区域）。
     val handleRadiusPx = with(density) { 8.dp.toPx() }
     val handleSlopPx = with(density) { 10.dp.toPx() }
-    // 统一基线：以拉丁参考行的 firstBaseline 为目标，各行绘制时按差值平移，抵消 CJK/拉丁字体度量差
-    // 导致的整行基线偏移（含中文的行里英文向下偏移）。
-    val refBaselinePx = remember(textStyle) { measurer.measure("Ag", textStyle).firstBaseline }
+    // 统一基线：各行把字母基线钉到「含 CJK 参考行」的 firstBaseline（参考串须含 CJK）。等于每行都预留 CJK 竖直度量：
+    // 英数位置恒定（加删中文不跳）、CJK 落在自然偏下位置不上飘。绘制顶 = 行顶 + (refBaselinePx − 本行 firstBaseline)。
+    val refBaselinePx = remember(textStyle) { measurer.measure("Ag中", textStyle).firstBaseline }
 
     // M2：等宽字符宽 + 超长「网格行」判定。超阈值的行不整行 shaping，只按可见列窗口做等宽算术定位/绘制
     // （仅不换行；softWrap 下仍走整行折行测量）。charW = 参考字符 "0" 的 advance；垂直度量复用其 cursorRect。
