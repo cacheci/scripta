@@ -955,12 +955,19 @@ fun CodeEditor(
                         // caretDragPos 存已含 grabDy 的目标点（与 mapped 同源），供 effect 判热区并逐帧落光标、可拖到视口外内容。
                         val slop = awaitTouchSlopOrCancellation(down.id) { c, _ -> c.consume() }
                         if (slop != null) {
+                            // 拖拽中每落到「新字符/行」补一次轻震（按位置去抖、非逐帧——一帧多次
+                            // 位移都在同一字符时不重复震）。比较落定后的 engine.caret（已 clamp）而非原始映射点：拖过
+                            // 短行行尾时 caret 停在行尾、原始列还在涨，比 caret 才不会空震。lastHaptic 初值为抓取帧的光标。
+                            var lastHaptic = engine.caret
                             caretDragPos = Offset(slop.position.x, slop.position.y + grabDy)
                             engine.setCursor(mapped(slop.position))
+                            if (engine.caret != lastHaptic) { haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove); lastHaptic = engine.caret }
                             caretDragActive = true
                             drag(down.id) { change ->
                                 caretDragPos = Offset(change.position.x, change.position.y + grabDy)
-                                engine.setCursor(mapped(change.position)); change.consume()
+                                engine.setCursor(mapped(change.position))
+                                if (engine.caret != lastHaptic) { haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove); lastHaptic = engine.caret }
+                                change.consume()
                             }
                             caretDragActive = false
                             caretDragPos = null
@@ -978,10 +985,16 @@ fun CodeEditor(
                             // 手柄泪滴（在光标下方约 1.5 行）所在行做「按行闸停」，落到下方短行 → 误判行尾、横向不滚。与光标手柄一致。
                             selectionDragPos = Offset(slop.position.x, slop.position.y + grabDy)
                             selectionDragActive = true
+                            // 端点每落到「新字符/行」补一次轻震，与光标手柄一致；比较落定后的活动端 engine.caret
+                            // （setSelection 的 head，已 clamp）。lastHaptic 初值为抓取的端点位置。
+                            var lastHaptic = grabbed
                             engine.setSelection(a, mapped(slop.position))
+                            if (engine.caret != lastHaptic) { haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove); lastHaptic = engine.caret }
                             drag(down.id) { change ->
                                 selectionDragPos = Offset(change.position.x, change.position.y + grabDy)
-                                engine.setSelection(a, mapped(change.position)); change.consume()
+                                engine.setSelection(a, mapped(change.position))
+                                if (engine.caret != lastHaptic) { haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove); lastHaptic = engine.caret }
+                                change.consume()
                             }
                             selectionDragPos = null
                             selectionDragActive = false
