@@ -242,22 +242,22 @@ fun EditorCanvas(
                     if (sel.isEmpty && sel.start.line == line) {
                         drawRect(colors.gutterBackground, topLeft = Offset(hlLeft, top), size = Size(hlWidth, h))
                     }
-                    // 选择覆盖层（跨视觉行的 path）
+                    // 选区底色纵向锚到固定行栅格 top（非 textTop）：须行行相接铺满不重叠——跟随 textTop（各行基线平移不一）会交叠。
                     if (!sel.isEmpty && line >= sel.start.line && line <= sel.end.line) {
                         val lineLen = engine.buffer.lineLength(line)
                         val cS = if (line == sel.start.line) sel.start.column else 0
                         val cE = if (line == sel.end.line) sel.end.column else lineLen
                         if (cE > cS) {
                             val path = layout.getPathForRange(cS, cE)
-                            path.translate(Offset(textX, textTop))
+                            path.translate(Offset(textX, top)) // getPathForRange 的行盒为 [0,lineHeight] → 平移到 [top, top+行高]
                             drawPath(path, colors.selection)
                         }
                         if (line != sel.end.line) {
                             val cr = layout.getCursorRect(lineLen)
                             drawRect(
                                 colors.selection,
-                                topLeft = Offset(textX + cr.left, textTop + cr.top),
-                                size = Size(lineHeightPx * 0.4f, cr.bottom - cr.top)
+                                topLeft = Offset(textX + cr.left, top),
+                                size = Size(lineHeightPx * 0.4f, lineHeightPx)
                             )
                         }
                     }
@@ -653,12 +653,12 @@ fun MagnifierOverlay(
                                             val cE = if (ln == sel.end.line) sel.end.column else len
                                             if (cE > cS) {
                                                 val path = layout.getPathForRange(cS, cE)
-                                                path.translate(Offset(textX, textTop))
+                                                path.translate(Offset(textX, lineTop)) // 选区底色锚固定行栅格（同主画布），不随基线平移
                                                 drawPath(path, colors.selection)
                                             }
                                             if (ln != sel.end.line) {
                                                 val cr = layout.getCursorRect(len)
-                                                drawRect(colors.selection, topLeft = Offset(textX + cr.left, textTop + cr.top), size = Size(lineHeightPx * 0.4f, cr.bottom - cr.top))
+                                                drawRect(colors.selection, topLeft = Offset(textX + cr.left, lineTop), size = Size(lineHeightPx * 0.4f, lineHeightPx))
                                             }
                                         }
                                         drawText(layout, color = colors.foreground, topLeft = Offset(textX, textTop))
