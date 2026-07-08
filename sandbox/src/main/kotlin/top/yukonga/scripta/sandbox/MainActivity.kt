@@ -15,12 +15,18 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.captionBar
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
-import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.union
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -106,7 +112,12 @@ class MainActivity : ComponentActivity() {
                     Modifier
                         .fillMaxWidth()
                         .background(Color(0xFF2D2D30))
-                        .statusBarsPadding() // 工具栏底色铺进状态栏，内容下移让开状态栏
+                        // 工具栏底色铺进状态栏，内容下移让开状态栏
+                        .windowInsetsPadding(
+                            WindowInsets.statusBars
+                                .union(WindowInsets.captionBar)
+                                .only(WindowInsetsSides.Top)
+                        )
                         .padding(8.dp)
                 ) {
                     BasicText(
@@ -170,7 +181,11 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier
                         .fillMaxWidth()
                         .weight(1f)
-                        .navigationBarsPadding()
+                        .windowInsetsPadding(
+                            WindowInsets.navigationBars
+                                .union(WindowInsets.captionBar)
+                                .only(WindowInsetsSides.Bottom)
+                        )
                         .imePadding(),
                 )
             }
