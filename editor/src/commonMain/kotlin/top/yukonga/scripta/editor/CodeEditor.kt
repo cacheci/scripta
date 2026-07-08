@@ -551,10 +551,14 @@ fun CodeEditor(
     // 否则会停在旧估算的「假底部」、选不到文档末尾（与 hitScrollY 同类修复）。
     val liveMaxScrollY = rememberUpdatedState(maxScrollY)
     val liveMaxScrollX = rememberUpdatedState(maxScrollX)
+    // 缩放手势期做边界阻尼需按「预览缩放 s」算 maxScroll = s·内容尺寸 − 视口；内容尺寸经 rememberUpdatedState 提到当前帧，
+    // 避开缩放手势 pointerInput(Unit) 闭包的 stale-capture（手势期无重排、内容尺寸恒定，故手势内取值稳定）。
+    val liveContentHeight = rememberUpdatedState(contentHeight)
+    val liveContentWidth = rememberUpdatedState(gutterWidthPx + padXPx * 2 + widestSeen[0])
 
     // 松手提交缩放：把连续 previewScale 落成精确的真实字号，一次性设好 scroll 并触发唯一一次重排。k = newFont/fontStart（== s，s 已夹字号范围）。
-    // 不换行：自相似 + TextMotion ⇒ 新字号内容 == 旧内容×s 逐像素，把预览末帧变换精确折进 scroll（newScroll = s·baseScroll − t，硬钳到界内）。
-    // 换行：横向钉左、纵向重排非自相似 → 锚「预览末帧屏幕顶」字符、由 LaunchedEffect(fontSizeSp) 重排后放回顶。
+    // 不换行：自相似 + TextMotion ⇒ 新字号内容 == 旧内容×s 逐像素，把预览末帧的等效滚动 effScroll=s·baseScroll−t 折成新 scroll；手势期已把 effScroll
+    // 硬钳在界内 ⇒ 必落界内、提交无跳。换行：横向钉左、纵向重排非自相似 → 锚「预览末帧屏幕顶」字符、由 LaunchedEffect(fontSizeSp) 重排后放回顶。
     fun commitZoom(fontStart: Float, s: Float, tx: Float, ty: Float) {
         val newFont = ZoomMath.commitFontSize(fontStart, s, ZOOM_MIN_SP, ZOOM_MAX_SP)
         // 字号与平移都极小（双指微动 / 纯噪声）：视作未动、不重排。
@@ -567,12 +571,13 @@ fun CodeEditor(
             scrollY = ZoomMath.provisionalScrollYWrap(topContentYOld, k, 0f) // 提交帧≈预览末帧，效应再精确置顶
             scrollX = 0f
         } else {
-            // 预览 screenY = s·(cy−scrollY)+ty，提交 screenY = s·cy − newScrollY ⇒ newScrollY = s·scrollY − ty（横向同理）。
-            // coerceAtLeast(0) 硬钳下界，上界由 re-clamp 在新字号下夹。scrollX/scrollY 手势期未变 = baseScroll。
+            // 预览 screenY = s·(cy−scrollY)+ty，提交 screenY = s·cy − newScrollY ⇒ newScrollY = s·scrollY − ty（横向同理）。手势期已硬钳在界内，
+            // coerceAtLeast(0) 仅防浮点/边界，上界由 re-clamp 在新字号下收。scrollX/scrollY 手势期未变 = baseScroll。
             scrollX = (s * scrollX - tx).coerceAtLeast(0f)
             scrollY = (s * scrollY - ty).coerceAtLeast(0f)
         }
         fontSizeSp = newFont // 唯一一次重排在此
+        previewScale = 1f; previewTx = 0f; previewTy = 0f // 变换已折进 scroll，预览归位
     }
     // 手势闭包 key=Unit、不随重组重启，会按值捕获闭包。用 rememberUpdatedState 让它每次调「当前帧」的 commitZoom
     // （内含最新 softWrap / lineTopPx / layoutFor / liveMaxScroll），避开 stale-capture（与 positionAtLive 同理）。
@@ -699,6 +704,8 @@ fun CodeEditor(
                     var committed = false // 本轮已提交（其后剩余单指走跟手平移）
                     var fontStart = fontSizeSp // 手势起始字号（commitZoom 折算基准；scrollX/Y 手势期不变，直接读实时值即 base）
                     var prevCentroid = Offset.Unspecified // 上一帧双指中点（增量变换用）
+                    var freeTx = 0f // 未受阻尼的自由平移（增量累积于此）；显示时经 rubber-band 映射写入 previewTx/Ty
+                    var freeTy = 0f
                     var panLast = Offset.Unspecified // 提交后剩余单指的上一位置（跟手平移基准）
                     var panActive = false // 跟手平移是否已越过 touchSlop（抬指残留微移 / 触屏 liftoff 抖动不算平移）
                     do {
@@ -714,26 +721,36 @@ fun CodeEditor(
                                 active = true; committed = false
                                 fontStart = fontSizeSp
                                 previewScale = 1f; previewTx = 0f; previewTy = 0f
+                                freeTx = 0f; freeTy = 0f
                                 prevCentroid = Offset.Unspecified
                             } else if (c != Offset.Unspecified) {
                                 if (prevCentroid == Offset.Unspecified) {
                                     prevCentroid = c // 首个稳定双指中点：仅确立增量基准，本帧不动变换（避免「新落指帧中点=单指」的首帧大跳）
                                 } else {
-                                    // 逐帧增量变换：绕**当前**中点缩放 ez（撞字号界后 ez→1、仍可继续平移）+ 中点位移 → T' = ez·T + (c − ez·prevC)、s'=ez·s。
+                                    // 逐帧增量累积到**自由**平移 freeTx/Ty：绕当前中点缩放 ez（撞字号界 ez→1、仍可平移）+ 中点位移 → T'=ez·T+(c−ez·prevC)。
                                     val newScale = ZoomMath.clampScaleToFontRange(previewScale * event.calculateZoom(), fontStart, ZOOM_MIN_SP, ZOOM_MAX_SP)
                                     val ez = if (previewScale > 0f) newScale / previewScale else 1f
-                                    if (!softWrap) previewTx = ez * previewTx + (c.x - ez * prevCentroid.x) // 换行钉左：previewTx 恒 0
-                                    previewTy = ez * previewTy + (c.y - ez * prevCentroid.y)
+                                    if (!softWrap) freeTx = ez * freeTx + (c.x - ez * prevCentroid.x) // 换行钉左：freeTx 恒 0
+                                    freeTy = ez * freeTy + (c.y - ez * prevCentroid.y)
                                     previewScale = newScale
                                     prevCentroid = c
+                                    // 显示 = 把自由平移的等效滚动 eff = s·base − free **硬钳到界内** [0, max@s]：四向跟手、到边硬停、绝不越界
+                                    // （放得下的轴 max=0 → 钉死）。自由层 freeTx/Ty 仍纯累积 → 边缘无漂移、回拉即跟。越界量恒 0 ⇒ 提交无越界、松手弹簧不触发。
+                                    val vw = viewportWidth
+                                    val vh = viewportHeight
+                                    if (!softWrap) {
+                                        val maxSX = (newScale * liveContentWidth.value - vw).coerceAtLeast(0f)
+                                        previewTx = newScale * scrollX - (newScale * scrollX - freeTx).coerceIn(0f, maxSX)
+                                    }
+                                    val maxSY = (newScale * liveContentHeight.value - vh).coerceAtLeast(0f)
+                                    previewTy = newScale * scrollY - (newScale * scrollY - freeTy).coerceIn(0f, maxSY)
                                 }
                             }
                             // 双指期**一律消费**（含持距漂移帧）：否则未消费帧落到 scrollable2D、攒 fling，非同时松手时甩出 → 大跳。
                             event.changes.forEach { it.consume() }
                         } else if (active && !committed) {
-                            // 掉到 <2 指：立即提交缩放，并以剩余单指为基准接管跟手平移（不交给 scrollable、避免交接跳变）。
+                            // 掉到 <2 指：立即提交缩放（内部把变换折进 scroll + 预览归位），并以剩余单指为基准接管跟手平移。
                             commitZoomLive.value(fontStart, previewScale, previewTx, previewTy)
-                            previewScale = 1f; previewTx = 0f; previewTy = 0f
                             committed = true; active = false
                             val p = event.changes.firstOrNull { it.pressed }
                             panLast = p?.position ?: Offset.Unspecified
@@ -759,11 +776,8 @@ fun CodeEditor(
                             }
                         }
                     } while (event.changes.any { it.pressed })
-                    // 兜底（双指同时抬起 / 手势取消，未经上面的 <2 指分支）：仍未提交则提交一次。
-                    if (active && !committed) {
-                        commitZoomLive.value(fontStart, previewScale, previewTx, previewTy)
-                        previewScale = 1f; previewTx = 0f; previewTy = 0f
-                    }
+                    // 兜底（双指同时抬起 / 手势取消，未经上面的 <2 指分支）：仍未提交则提交一次（内部折算进 scroll + 预览归位）。
+                    if (active && !committed) commitZoomLive.value(fontStart, previewScale, previewTx, previewTy)
                 }
             }
             .editorTextInput(engine, enabled = !readOnly)
