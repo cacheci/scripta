@@ -20,8 +20,6 @@ import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.captionBar
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.imePadding
-import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBars
@@ -177,16 +175,11 @@ class MainActivity : ComponentActivity() {
                     softWrap = wrap,
                     readOnly = readOnly,
                     lineNumberMode = lineNumberMode,
-                    // 让开底部导航栏，再让开键盘；imePadding 消费在导航栏之后，底部取二者较大值（关键盘=导航栏、开键盘=键盘）。
+                    // 底部系统栏（导航栏 / 键盘）与其沉浸配色由编辑器内部消费（据是否显示符号条决定谁让位、
+                    // 底色铺到边缘），宿主不再加 imePadding/导航栏 padding，只给尺寸。
                     modifier = Modifier
                         .fillMaxWidth()
-                        .weight(1f)
-                        .windowInsetsPadding(
-                            WindowInsets.navigationBars
-                                .union(WindowInsets.captionBar)
-                                .only(WindowInsetsSides.Bottom)
-                        )
-                        .imePadding(),
+                        .weight(1f),
                 )
             }
         }

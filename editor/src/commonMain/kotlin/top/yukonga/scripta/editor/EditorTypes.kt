@@ -35,6 +35,10 @@ data class EditorColors(
     val selection: Color,
     /** Caret / selection drag handle (teardrop) color. */
     val handle: Color,
+    /** 底部符号条：背景 / 键文字 / 按下高亮。带默认值，不破坏既有构造。 */
+    val symbolBarBackground: Color = Color(0xFF2A2A2C),
+    val symbolBarForeground: Color = Color(0xFFCFCFCF),
+    val symbolBarPressed: Color = Color(0x33FFFFFF),
 ) {
     companion object {
         /** A neutral dark default so the scaffold renders visibly before a theme is wired up. */

@@ -16,7 +16,17 @@ import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.captionBar
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.union
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.overscroll
 import androidx.compose.foundation.rememberOverscrollEffect
 import androidx.compose.runtime.Composable
@@ -24,6 +34,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -120,8 +131,13 @@ private class CachedLayout(var validatedVersion: Int, val content: String, val l
 /**
  * 虚拟化代码编辑器入口。自绘 + 视口虚拟化 + 自管 IME（Android），不使用 BasicTextField。
  *
- * 宿主须为编辑器容器消费 IME insets（如 `Modifier.imePadding()`），使可用视口高度反映键盘弹出后的
- * 可见高度——否则光标随动会把光标滚到键盘下面。
+ * **底部系统栏（导航栏 / 键盘）由编辑器内部消费**，宿主不要再对编辑器加 `imePadding()`/导航栏 padding
+ * （否则重复让位、且底色无法铺进小白条区）——宿主只需给它 `weight`/尺寸即可。内部据是否显示符号条决定谁
+ * 让开系统栏：显示时符号条背景铺到屏幕边缘、键抬到栏上；隐藏时文本区让开系统栏、编辑器底色铺到边缘。
+ * 这样可用视口高度始终反映键盘弹出后的可见高度，光标随动不会滚到键盘下面。
+ *
+ * [symbols] 非空且非只读时在底部常驻一条横向可滚的符号快捷条，文本视口相应缩小、文本浮于其上。
+ * 传 `emptyList()` 关闭；只读时不显示。
  */
 @OptIn(ExperimentalFoundationApi::class) // scrollable2D / rememberScrollable2DState 仍为实验 API
 @Composable
@@ -134,6 +150,7 @@ fun CodeEditor(
     readOnly: Boolean = false,
     softWrap: Boolean = false,
     lineNumberMode: LineNumberMode = LineNumberMode.PinnedToScreen,
+    symbols: List<EditorSymbol> = DefaultEditorSymbols,
 ) {
     val engine = controller.engine
     LaunchedEffect(initialText) { controller.setText(initialText) }
@@ -441,7 +458,7 @@ fun CodeEditor(
     // 光标泪滴手柄：点按落光标 / 拖动后短暂显示，约 4s 无操作自动隐藏；打字（buffer.version 变化）立即收起。
     // 选区两端手柄不走这里——它们随选区常驻，由画布按 !selection.isEmpty 直接判定。
     var caretHandleVisible by remember { mutableStateOf(false) }
-    var caretHandleToken by remember { mutableStateOf(0) }
+    var caretHandleToken by remember { mutableIntStateOf(0) }
     fun pingCaretHandle() {
         caretHandleVisible = true; caretHandleToken++
     }
@@ -482,7 +499,7 @@ fun CodeEditor(
     // 它按旧 14sp 几何算 caretTop、却比实时（新字号尺度）scrollY，两坐标系差「挂载/当前 字号比」→ 纯点击把已可见光标误判越界、
     // 滚一大段（跳位 ∝ 字号比；默认 14sp 时比=1、无跳）。故用 rememberUpdatedState 把整段提到「当前帧」，collect 里调 .value()
     // 用最新字号几何——与 positionAtLive/caretRectLive/liveMaxScroll 同法（本项目到处规避此坑，唯独这里漏了）。
-    val revealCaretIntoViewLive = rememberUpdatedState<() -> Unit> {
+    val revealCaretIntoViewLive = rememberUpdatedState {
         // 跟随「活动端」(head) 而非归一化的 selEnd：Shift+上/左 反向扩选时 head 在选区顶端，视口须随之上滚。
         val caret = engine.caret
         val line = caret.line
@@ -702,424 +719,451 @@ fun CodeEditor(
         vGoalCaret = to
     }
 
-    Box(
-        modifier
-            .background(colors.background)
-            .clipToBounds()
-            .overscroll(overscroll)
-            .onSizeChanged { viewportWidth = it.width.toFloat(); viewportHeight = it.height.toFloat() }
-            .onGloballyPositioned { contentTopInWindow = it.positionInWindow().y }
-            .scrollable2D(scroll2D, overscrollEffect = overscroll, interactionSource = scrollInteraction)
-            .pointerInput(Unit) {
-                // 双指缩放 + 缩放后单指跟手平移（一个连续手势内完成，避免与 scrollable 交接跳变）。≥2 指时累积连续 previewScale
-                // （仅 draw 阶段读 → 零重组/零重排/零重测）并消费；松手一次 commitZoom 换字号 + 重排。提交后若仍剩一指，**本处理器**
-                // 继续按其位移 1:1 平移「已重排」的内容（并消费，scrollable 不再插手）——平移直接作用在提交后真实内容上、跟手、无跳。
-                // 平移不提供 fling（缩放后微调足矣）；抬手结束。纯单指（从未双指）不进任何分支、不消费 → 照常交 scrollable 滚动/惯性。
-                awaitEachGesture {
-                    awaitFirstDown(requireUnconsumed = false)
-                    var active = false // 已进入双指缩放
-                    var committed = false // 本轮已提交（其后剩余单指走跟手平移）
-                    var fontStart = fontSizeSp // 手势起始字号（commitZoom 折算基准；scrollX/Y 手势期不变，直接读实时值即 base）
-                    var prevCentroid = Offset.Unspecified // 上一帧双指中点（增量变换用）
-                    var freeTx = 0f // 未受阻尼的自由平移（增量累积于此）；显示时经 rubber-band 映射写入 previewTx/Ty
-                    var freeTy = 0f
-                    var panLast = Offset.Unspecified // 提交后剩余单指的上一位置（跟手平移基准）
-                    var panActive = false // 跟手平移是否已越过 touchSlop（抬指残留微移 / 触屏 liftoff 抖动不算平移）
-                    do {
-                        val event = awaitPointerEvent()
-                        val pressed = event.changes.count { it.pressed }
-                        if (pressed >= 2) {
-                            panLast = Offset.Unspecified; panActive = false // 回到双指：清除单指平移基准与激活态
-                            // calculateCentroid 只计入「本帧且上帧都按下」的指针：第二指刚落那帧新指 previousPressed=false 不计入 →
-                            // 返回的是旧那根手指位置、非真中点。故新指落下帧不拿它当基准，等下一帧两指都稳定按下再确立中点。
-                            val c = event.calculateCentroid(useCurrent = true)
-                            if (!active) {
-                                // 缩放起始：起始态归零、捕获起始字号。prevCentroid 置未定，等首个稳定双指中点帧再确立。
-                                active = true; committed = false
-                                fontStart = fontSizeSp
-                                previewScale = 1f; previewTx = 0f; previewTy = 0f
-                                freeTx = 0f; freeTy = 0f
-                                prevCentroid = Offset.Unspecified
-                            } else if (c != Offset.Unspecified) {
-                                if (prevCentroid == Offset.Unspecified) {
-                                    prevCentroid = c // 首个稳定双指中点：仅确立增量基准，本帧不动变换（避免「新落指帧中点=单指」的首帧大跳）
-                                } else {
-                                    // 逐帧增量累积到**自由**平移 freeTx/Ty：绕当前中点缩放 ez（撞字号界 ez→1、仍可平移）+ 中点位移 → T'=ez·T+(c−ez·prevC)。
-                                    val newScale = ZoomMath.clampScaleToFontRange(
-                                        previewScale * event.calculateZoom(),
-                                        fontStart,
-                                        ZOOM_MIN_SP,
-                                        ZOOM_MAX_SP
-                                    )
-                                    val ez = if (previewScale > 0f) newScale / previewScale else 1f
-                                    if (!softWrap) freeTx = ez * freeTx + (c.x - ez * prevCentroid.x) // 换行钉左：freeTx 恒 0
-                                    freeTy = ez * freeTy + (c.y - ez * prevCentroid.y)
-                                    previewScale = newScale
-                                    prevCentroid = c
-                                    // 显示 = 把自由平移的等效滚动 eff = s·base − free **硬钳到界内** [0, max@s]：四向跟手、到边硬停、绝不越界
-                                    // （放得下的轴 max=0 → 钉死）。自由层 freeTx/Ty 仍纯累积 → 边缘无漂移、回拉即跟。越界量恒 0 ⇒ 提交无越界、松手弹簧不触发。
-                                    val vw = viewportWidth
-                                    val vh = viewportHeight
-                                    if (!softWrap) {
-                                        val maxSX = (newScale * liveContentWidth.value - vw).coerceAtLeast(0f)
-                                        previewTx = newScale * scrollX - (newScale * scrollX - freeTx).coerceIn(0f, maxSX)
-                                    }
-                                    // 纵向上界含底部留白（vh 实时读、不 stale）：预览可停在留白里，与提交 re-clamp 的 maxScrollY 同式 ⇒ 起手不 snap、松手不跳。
-                                    val maxSY = (newScale * liveContentHeight.value - vh + vh * BOTTOM_SCROLL_PAD_FRACTION).coerceAtLeast(0f)
-                                    previewTy = newScale * scrollY - (newScale * scrollY - freeTy).coerceIn(0f, maxSY)
-                                }
-                            }
-                            // 双指期**一律消费**（含持距漂移帧）：否则未消费帧落到 scrollable2D、攒 fling，非同时松手时甩出 → 大跳。
-                            event.changes.forEach { it.consume() }
-                        } else if (active && !committed) {
-                            // 掉到 <2 指：立即提交缩放（内部把变换折进 scroll + 预览归位），并以剩余单指为基准接管跟手平移。
-                            commitZoomLive.value(fontStart, previewScale, previewTx, previewTy)
-                            committed = true; active = false
-                            val p = event.changes.firstOrNull { it.pressed }
-                            panLast = p?.position ?: Offset.Unspecified
-                            // 连同「刚抬起」的那根手指一并消费：否则 scrollable2D 可能在其 up 上结束拖动并 fling → 松手大跳。
-                            event.changes.forEach { it.consume() }
-                        } else if (committed && pressed >= 1) {
-                            // 缩放后剩余单指继续滑动：越过 touchSlop 才算「跟手平移」，据位移 1:1 平移已重排内容（跟手、基于手指下真实内容）。
-                            // 未越 slop 前不动：滤掉「本想同时松手却一根先抬」时残留手指的微移 / 触屏 liftoff 抖动，避免误滚动跳变。全程消费防落 scrollable。
-                            val p = event.changes.firstOrNull { it.pressed }
-                            if (p != null) {
-                                if (panLast != Offset.Unspecified) {
-                                    val d = p.position - panLast
-                                    if (!panActive) {
-                                        // 距 commit 基准累积（未越 slop 前不更新 panLast）；越档后从当前位置起算、丢弃 slop 内位移。
-                                        if (d.getDistance() > viewConfiguration.touchSlop) {
-                                            panActive = true; panLast = p.position
-                                        }
-                                    } else {
-                                        scrollX = (scrollX - d.x).coerceIn(0f, liveMaxScrollX.value)
-                                        scrollY = (scrollY - d.y).coerceIn(0f, liveMaxScrollY.value)
-                                        panLast = p.position
-                                    }
-                                } else panLast = p.position
-                                p.consume()
-                            }
-                        }
-                    } while (event.changes.any { it.pressed })
-                    // 兜底（双指同时抬起 / 手势取消，未经上面的 <2 指分支）：仍未提交则提交一次（内部折算进 scroll + 预览归位）。
-                    if (active && !committed) commitZoomLive.value(fontStart, previewScale, previewTx, previewTy)
-                }
-            }
-            .editorTextInput(engine, enabled = !readOnly)
-            .onKeyEvent { ev ->
-                if (ev.type != KeyEventType.KeyDown) return@onKeyEvent false
-                if (ev.isCtrlPressed) {
-                    when (ev.key) {
-                        // 全选/复制在只读模式下依然可用（只读恰恰最需要可选可复制）。
-                        Key.A -> {
-                            engine.selectAll(); true
-                        }
+    // 底部安全区 = 导航栏 / captionBar / 键盘 三者较大者（union 取各边最大）。编辑器自管它：背景铺到屏幕边缘、
+    // 内容抬到栏上，故宿主无需再加 imePadding/导航栏 padding。键盘收起=导航栏高，弹出=键盘高（已含导航栏区）。
+    val bottomBarInsets = WindowInsets.navigationBars
+        .union(WindowInsets.captionBar)
+        .union(WindowInsets.ime)
+        .only(WindowInsetsSides.Bottom)
+    val showSymbolBar = !readOnly && symbols.isNotEmpty()
 
-                        Key.C -> {
-                            engine.selectedText()?.let { txt ->
-                                clipboardScope.launch { clipboard.setClipEntry(plainTextClipEntry(txt)) }
-                            }; true
-                        }
-                        // 剪切/粘贴会改动文档，只读时消费事件但不执行。
-                        Key.X -> {
-                            if (!readOnly) engine.selectedText()?.let { txt ->
-                                clipboardScope.launch { clipboard.setClipEntry(plainTextClipEntry(txt)) }
-                                engine.replaceSelection("")
-                            }; true
-                        }
-
-                        Key.V -> {
-                            if (!readOnly) clipboardScope.launch {
-                                clipboard.getClipEntry()?.plainText()?.let { engine.insert(it) }
-                            }; true
-                        }
-
-                        else -> false
-                    }
-                } else {
-                    val shift = ev.isShiftPressed
-                    when (ev.key) {
-                        Key.DirectionLeft -> {
-                            engine.moveCaretHorizontally(-1, shift); true
-                        }
-
-                        Key.DirectionRight -> {
-                            engine.moveCaretHorizontally(1, shift); true
-                        }
-
-                        Key.DirectionUp -> {
-                            if (softWrap) moveCaretVisual(-1, shift) else engine.moveCaretVertically(-1, shift); true
-                        }
-
-                        Key.DirectionDown -> {
-                            if (softWrap) moveCaretVisual(1, shift) else engine.moveCaretVertically(1, shift); true
-                        }
-
-                        Key.Backspace -> {
-                            if (!readOnly) engine.backspace(); true
-                        }
-
-                        Key.Delete -> {
-                            if (!readOnly) engine.deleteForward(); true
-                        }
-
-                        Key.Enter, Key.NumPadEnter -> {
-                            if (!readOnly) engine.insert("\n"); true
-                        }
-                        // 可编辑时 Tab 插入缩进并消费，防止事件回落到 Compose 默认焦点遍历、把焦点带走
-                        // （代码/YAML 编辑器里 Tab 跳焦点是致命的意外行为）。只读时放行，让 Tab 正常切换焦点。
-                        Key.Tab -> if (readOnly) false else {
-                            engine.insert("    "); true
-                        }
-
-                        else -> false
-                    }
-                }
-            }
-            .focusRequester(focusRequester)
-            .focusable(interactionSource = interaction)
-            // 点按手势（只读时同样挂载：仅不弹软键盘、不接受编辑）。自定义而非 detectTapGestures：
-            // 后者一旦提供 onDoubleTap，就要等双击超时(~300ms)确认才回调 onTap，点击落光标发闷。这里
-            // 第一击抬手「立即」落光标 + 弹键盘；双击窗口内若来第二击，升级为选词（桌面双击、移动端双击皆可）。
-            // 长按拖拽由下方 block 接管——指针被其消费/取消时 waitForUpOrCancellation 返回 null，本 block 让位。
-            .pointerInput(engine) {
-                awaitEachGesture {
-                    awaitFirstDown(requireUnconsumed = false)
-                    // 等抬手，但包一层长按超时：若超时前未抬手，说明这次已升级为长按（由下方 block 选词），
-                    // 本 block 直接让位、不落光标——否则纯长按选词后「不拖动直接抬手」会把刚选好的词塌成光标
-                    // （长按 block 不移动时不消费任何 change，waitForUpOrCancellation 拿到未消费的 up 会误触发）。
-                    val up = withTimeoutOrNull(viewConfiguration.longPressTimeoutMillis) {
-                        waitForUpOrCancellation()
-                    } ?: return@awaitEachGesture
-                    engine.setCursor(positionAtLive.value(up.position))
-                    focusRequester.requestFocus()
-                    if (!readOnlyLive.value) {
-                        engine.requestShowKeyboard?.invoke()
-                        pingCaretHandle() // 落光标后显示泪滴手柄（4s 后自动隐藏）
-                    }
-                    val second = withTimeoutOrNull(viewConfiguration.doubleTapTimeoutMillis) {
+    // 根为 Column：文本区（weight 1f）在上、符号条常驻在下。Column 底色铺满整列（含系统栏区）。
+    Column(modifier.background(colors.background)) {
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .weight(1f)
+                // 无符号条时文本区自行让开底部系统栏（末行不落在小白条/键盘下）；有符号条时不让位——由符号条随键盘
+                // 增高把文本区顶上去（文本区底 = 符号条顶，始终在系统栏之上），避免双重让位把文本区多压一截。
+                .then(if (showSymbolBar) Modifier else Modifier.windowInsetsPadding(bottomBarInsets))
+                .clipToBounds()
+                .overscroll(overscroll)
+                .onSizeChanged { viewportWidth = it.width.toFloat(); viewportHeight = it.height.toFloat() }
+                .onGloballyPositioned { contentTopInWindow = it.positionInWindow().y }
+                .scrollable2D(scroll2D, overscrollEffect = overscroll, interactionSource = scrollInteraction)
+                .pointerInput(Unit) {
+                    // 双指缩放 + 缩放后单指跟手平移（一个连续手势内完成，避免与 scrollable 交接跳变）。≥2 指时累积连续 previewScale
+                    // （仅 draw 阶段读 → 零重组/零重排/零重测）并消费；松手一次 commitZoom 换字号 + 重排。提交后若仍剩一指，**本处理器**
+                    // 继续按其位移 1:1 平移「已重排」的内容（并消费，scrollable 不再插手）——平移直接作用在提交后真实内容上、跟手、无跳。
+                    // 平移不提供 fling（缩放后微调足矣）；抬手结束。纯单指（从未双指）不进任何分支、不消费 → 照常交 scrollable 滚动/惯性。
+                    awaitEachGesture {
                         awaitFirstDown(requireUnconsumed = false)
-                    }
-                    val up2 = if (second != null) waitForUpOrCancellation() else null
-                    if (up2 != null) {
-                        val w = engine.wordRangeAt(positionAtLive.value(up2.position))
-                        engine.setSelection(w.start, w.end)
-                        focusRequester.requestFocus()
+                        var active = false // 已进入双指缩放
+                        var committed = false // 本轮已提交（其后剩余单指走跟手平移）
+                        var fontStart = fontSizeSp // 手势起始字号（commitZoom 折算基准；scrollX/Y 手势期不变，直接读实时值即 base）
+                        var prevCentroid = Offset.Unspecified // 上一帧双指中点（增量变换用）
+                        var freeTx = 0f // 未受阻尼的自由平移（增量累积于此）；显示时经 rubber-band 映射写入 previewTx/Ty
+                        var freeTy = 0f
+                        var panLast = Offset.Unspecified // 提交后剩余单指的上一位置（跟手平移基准）
+                        var panActive = false // 跟手平移是否已越过 touchSlop（抬指残留微移 / 触屏 liftoff 抖动不算平移）
+                        do {
+                            val event = awaitPointerEvent()
+                            val pressed = event.changes.count { it.pressed }
+                            if (pressed >= 2) {
+                                panLast = Offset.Unspecified; panActive = false // 回到双指：清除单指平移基准与激活态
+                                // calculateCentroid 只计入「本帧且上帧都按下」的指针：第二指刚落那帧新指 previousPressed=false 不计入 →
+                                // 返回的是旧那根手指位置、非真中点。故新指落下帧不拿它当基准，等下一帧两指都稳定按下再确立中点。
+                                val c = event.calculateCentroid(useCurrent = true)
+                                if (!active) {
+                                    // 缩放起始：起始态归零、捕获起始字号。prevCentroid 置未定，等首个稳定双指中点帧再确立。
+                                    active = true; committed = false
+                                    fontStart = fontSizeSp
+                                    previewScale = 1f; previewTx = 0f; previewTy = 0f
+                                    freeTx = 0f; freeTy = 0f
+                                    prevCentroid = Offset.Unspecified
+                                } else if (c != Offset.Unspecified) {
+                                    if (prevCentroid == Offset.Unspecified) {
+                                        prevCentroid = c // 首个稳定双指中点：仅确立增量基准，本帧不动变换（避免「新落指帧中点=单指」的首帧大跳）
+                                    } else {
+                                        // 逐帧增量累积到**自由**平移 freeTx/Ty：绕当前中点缩放 ez（撞字号界 ez→1、仍可平移）+ 中点位移 → T'=ez·T+(c−ez·prevC)。
+                                        val newScale = ZoomMath.clampScaleToFontRange(
+                                            previewScale * event.calculateZoom(),
+                                            fontStart,
+                                            ZOOM_MIN_SP,
+                                            ZOOM_MAX_SP
+                                        )
+                                        val ez = if (previewScale > 0f) newScale / previewScale else 1f
+                                        if (!softWrap) freeTx = ez * freeTx + (c.x - ez * prevCentroid.x) // 换行钉左：freeTx 恒 0
+                                        freeTy = ez * freeTy + (c.y - ez * prevCentroid.y)
+                                        previewScale = newScale
+                                        prevCentroid = c
+                                        // 显示 = 把自由平移的等效滚动 eff = s·base − free **硬钳到界内** [0, max@s]：四向跟手、到边硬停、绝不越界
+                                        // （放得下的轴 max=0 → 钉死）。自由层 freeTx/Ty 仍纯累积 → 边缘无漂移、回拉即跟。越界量恒 0 ⇒ 提交无越界、松手弹簧不触发。
+                                        val vw = viewportWidth
+                                        val vh = viewportHeight
+                                        if (!softWrap) {
+                                            val maxSX = (newScale * liveContentWidth.value - vw).coerceAtLeast(0f)
+                                            previewTx = newScale * scrollX - (newScale * scrollX - freeTx).coerceIn(0f, maxSX)
+                                        }
+                                        // 纵向上界含底部留白（vh 实时读、不 stale）：预览可停在留白里，与提交 re-clamp 的 maxScrollY 同式 ⇒ 起手不 snap、松手不跳。
+                                        val maxSY =
+                                            (newScale * liveContentHeight.value - vh + vh * BOTTOM_SCROLL_PAD_FRACTION).coerceAtLeast(0f)
+                                        previewTy = newScale * scrollY - (newScale * scrollY - freeTy).coerceIn(0f, maxSY)
+                                    }
+                                }
+                                // 双指期**一律消费**（含持距漂移帧）：否则未消费帧落到 scrollable2D、攒 fling，非同时松手时甩出 → 大跳。
+                                event.changes.forEach { it.consume() }
+                            } else if (active && !committed) {
+                                // 掉到 <2 指：立即提交缩放（内部把变换折进 scroll + 预览归位），并以剩余单指为基准接管跟手平移。
+                                commitZoomLive.value(fontStart, previewScale, previewTx, previewTy)
+                                committed = true; active = false
+                                val p = event.changes.firstOrNull { it.pressed }
+                                panLast = p?.position ?: Offset.Unspecified
+                                // 连同「刚抬起」的那根手指一并消费：否则 scrollable2D 可能在其 up 上结束拖动并 fling → 松手大跳。
+                                event.changes.forEach { it.consume() }
+                            } else if (committed && pressed >= 1) {
+                                // 缩放后剩余单指继续滑动：越过 touchSlop 才算「跟手平移」，据位移 1:1 平移已重排内容（跟手、基于手指下真实内容）。
+                                // 未越 slop 前不动：滤掉「本想同时松手却一根先抬」时残留手指的微移 / 触屏 liftoff 抖动，避免误滚动跳变。全程消费防落 scrollable。
+                                val p = event.changes.firstOrNull { it.pressed }
+                                if (p != null) {
+                                    if (panLast != Offset.Unspecified) {
+                                        val d = p.position - panLast
+                                        if (!panActive) {
+                                            // 距 commit 基准累积（未越 slop 前不更新 panLast）；越档后从当前位置起算、丢弃 slop 内位移。
+                                            if (d.getDistance() > viewConfiguration.touchSlop) {
+                                                panActive = true; panLast = p.position
+                                            }
+                                        } else {
+                                            scrollX = (scrollX - d.x).coerceIn(0f, liveMaxScrollX.value)
+                                            scrollY = (scrollY - d.y).coerceIn(0f, liveMaxScrollY.value)
+                                            panLast = p.position
+                                        }
+                                    } else panLast = p.position
+                                    p.consume()
+                                }
+                            }
+                        } while (event.changes.any { it.pressed })
+                        // 兜底（双指同时抬起 / 手势取消，未经上面的 <2 指分支）：仍未提交则提交一次（内部折算进 scroll + 预览归位）。
+                        if (active && !committed) commitZoomLive.value(fontStart, previewScale, previewTx, previewTy)
                     }
                 }
-            }
-            .pointerInput(engine) {
-                // 长按才进入选择：长按处先选中该词，随后拖拽扩展选区。普通拖拽不在此消费，
-                // 于是落到上面的 scrollable 去滚动页面（移动端标准行为）。拖到上下边缘由
-                // selectionDragPos 驱动的边缘自动滚动 effect 接管。只读模式同样可用（纯选择、不改文档）。
-                detectDragGesturesAfterLongPress(
-                    onDragStart = { p ->
-                        haptic.performHapticFeedback(HapticFeedbackType.LongPress) // 长按进入选择时轻震确认
-                        val w = engine.wordRangeAt(positionAtLive.value(p))
-                        engine.setSelection(w.start, w.end)
-                        // 锚定整个初选词、按词粒度扩展（不用按下点作字符锚）——否则边缘自动滚动或首次拖拽会把
-                        // 刚选好的词塌成字符级光标（长按靠近视口边缘时尤其明显：一选中就瞬间消失）。
-                        selectionWordAnchor = w
-                        selectionAnchor = null
-                        focusRequester.requestFocus()
-                        selectionDragPos = p
-                        selectionDragActive = true
-                    },
-                    onDrag = { change, _ ->
-                        selectionDragPos = change.position
-                        selectionWordAnchor?.let { engine.selectWordRange(it, positionAtLive.value(change.position)) }
-                    },
-                    onDragEnd = { selectionDragPos = null; selectionDragActive = false; selectionWordAnchor = null },
-                    onDragCancel = { selectionDragPos = null; selectionDragActive = false; selectionWordAnchor = null },
-                )
-            }
-            // 手柄拖拽：抓到光标/选区端点手柄即接管——重定位光标或调整选区端点；未抓到则不消费，让位给
-            // 滚动/点按/长按。本块是最内层 pointerInput，Main 阶段最先处理，故能先于 scrollable 抢占手柄拖拽；
-            // 命中盒经 caretRectLive 取当前帧几何，避开 stale-capture 坑。
-            .pointerInput(engine) {
-                awaitEachGesture {
-                    val down = awaitFirstDown(requireUnconsumed = false)
-                    val p = down.position
-                    val sel = engine.selection
-                    fun hit(kind: HandleKind, at: TextPosition): Boolean {
-                        val r = caretRectLive.value(at) ?: return false
-                        return EditorGeometry.handleGeometry(kind, r[0], r[1], r[2], handleRadiusPx, handleSlopPx)
-                            .hitContains(p.x, p.y)
-                    }
-                    // 有选区时只看两端手柄（终点优先）；无选区且光标手柄可见、非只读时看光标手柄。
-                    var kind: HandleKind? = null
-                    var anchor: TextPosition? = null
-                    var grabbed: TextPosition? = null
-                    if (!sel.isEmpty) {
-                        when {
-                            hit(HandleKind.SelectionEnd, sel.end) -> {
-                                kind = HandleKind.SelectionEnd; anchor = sel.start; grabbed = sel.end
+                .editorTextInput(engine, enabled = !readOnly)
+                .onKeyEvent { ev ->
+                    if (ev.type != KeyEventType.KeyDown) return@onKeyEvent false
+                    if (ev.isCtrlPressed) {
+                        when (ev.key) {
+                            // 全选/复制在只读模式下依然可用（只读恰恰最需要可选可复制）。
+                            Key.A -> {
+                                engine.selectAll(); true
                             }
 
-                            hit(HandleKind.SelectionStart, sel.start) -> {
-                                kind = HandleKind.SelectionStart; anchor = sel.end; grabbed = sel.start
+                            Key.C -> {
+                                engine.selectedText()?.let { txt ->
+                                    clipboardScope.launch { clipboard.setClipEntry(plainTextClipEntry(txt)) }
+                                }; true
                             }
+                            // 剪切/粘贴会改动文档，只读时消费事件但不执行。
+                            Key.X -> {
+                                if (!readOnly) engine.selectedText()?.let { txt ->
+                                    clipboardScope.launch { clipboard.setClipEntry(plainTextClipEntry(txt)) }
+                                    engine.replaceSelection("")
+                                }; true
+                            }
+
+                            Key.V -> {
+                                if (!readOnly) clipboardScope.launch {
+                                    clipboard.getClipEntry()?.plainText()?.let { engine.insert(it) }
+                                }; true
+                            }
+
+                            else -> false
                         }
-                    } else if (caretHandleVisible && !readOnlyLive.value && hit(HandleKind.Caret, sel.start)) {
-                        kind = HandleKind.Caret; grabbed = sel.start
-                    }
-                    if (kind == null) return@awaitEachGesture // 未抓到手柄，让位给滚动/点按/长按
-
-                    down.consume()
-                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove) // 抓住手柄时轻震确认
-                    // 纵向抓取偏移：目标点落在光标中部而非手指处（手指压在泪滴上、光标在其上方）。
-                    val gr = grabbed?.let { caretRectLive.value(it) }
-                    val grabDy = if (gr != null) (gr[1] + gr[2]) / 2f - p.y else 0f
-                    fun mapped(o: Offset): TextPosition = positionAtLive.value(Offset(o.x, o.y + grabDy))
-
-                    if (kind == HandleKind.Caret) {
-                        engine.setCursor(mapped(p)); pingCaretHandle()
-                        // 先等真正拖动（越过 touchSlop）才进入重定位 + 边缘自动滚动；纯点按（按下即抬起、位移不过 slop）
-                        // 只落光标、绝不激活自动滚动——否则光标本就靠边时，一按到边缘热区就被 caretDrag effect 当成「停在边缘」
-                        // 带着滚。以位移阈值区分：点=只落光标永不滚，拖=才滚，且自动滚是「拖拽进行时」的属性。
-                        // caretDragPos 存已含 grabDy 的目标点（与 mapped 同源），供 effect 判热区并逐帧落光标、可拖到视口外内容。
-                        val slop = awaitTouchSlopOrCancellation(down.id) { c, _ -> c.consume() }
-                        if (slop != null) {
-                            // 拖拽中每落到「新字符/行」补一次轻震（按位置去抖、非逐帧——一帧多次
-                            // 位移都在同一字符时不重复震）。比较落定后的 engine.caret（已 clamp）而非原始映射点：拖过
-                            // 短行行尾时 caret 停在行尾、原始列还在涨，比 caret 才不会空震。lastHaptic 初值为抓取帧的光标。
-                            var lastHaptic = engine.caret
-                            caretDragPos = Offset(slop.position.x, slop.position.y + grabDy)
-                            engine.setCursor(mapped(slop.position))
-                            if (engine.caret != lastHaptic) {
-                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove); lastHaptic = engine.caret
-                            }
-                            caretDragActive = true
-                            handleDragActive = true
-                            drag(down.id) { change ->
-                                caretDragPos = Offset(change.position.x, change.position.y + grabDy)
-                                engine.setCursor(mapped(change.position))
-                                if (engine.caret != lastHaptic) {
-                                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove); lastHaptic = engine.caret
-                                }
-                                change.consume()
-                            }
-                            caretDragActive = false
-                            handleDragActive = false
-                            caretDragPos = null
-                        }
-                        pingCaretHandle() // 抬手后重置 4s 计时
                     } else {
-                        val a = anchor!!
-                        // 与光标手柄同理：越过 touchSlop 才算拖拽端点、激活延伸 + 边缘自动滚动；纯点按端点手柄（不过 slop）
-                        // 保持选区原样、不滚动——否则端点手柄本就靠边时，一按到边缘热区就被选区 effect 当成「停在边缘」带着滚。
-                        val slop = awaitTouchSlopOrCancellation(down.id) { c, _ -> c.consume() }
-                        if (slop != null) {
-                            selectionAnchor = a
-                            selectionWordAnchor = null // 端点拖拽走字符级锚
-                            // selectionDragPos 存已含 grabDy 的目标点（与 mapped/setSelection 同源）：否则边缘自动滚动 effect 会按
-                            // 手柄泪滴（在光标下方约 1.5 行）所在行做「按行闸停」，落到下方短行 → 误判行尾、横向不滚。与光标手柄一致。
-                            selectionDragPos = Offset(slop.position.x, slop.position.y + grabDy)
-                            selectionDragActive = true
-                            handleDragActive = true
-                            // 端点每落到「新字符/行」补一次轻震，与光标手柄一致；比较落定后的活动端 engine.caret
-                            // （setSelection 的 head，已 clamp）。lastHaptic 初值为抓取的端点位置。
-                            var lastHaptic = grabbed
-                            engine.setSelection(a, mapped(slop.position))
-                            if (engine.caret != lastHaptic) {
-                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove); lastHaptic = engine.caret
+                        val shift = ev.isShiftPressed
+                        when (ev.key) {
+                            Key.DirectionLeft -> {
+                                engine.moveCaretHorizontally(-1, shift); true
                             }
-                            drag(down.id) { change ->
-                                selectionDragPos = Offset(change.position.x, change.position.y + grabDy)
-                                engine.setSelection(a, mapped(change.position))
-                                if (engine.caret != lastHaptic) {
-                                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove); lastHaptic = engine.caret
-                                }
-                                change.consume()
+
+                            Key.DirectionRight -> {
+                                engine.moveCaretHorizontally(1, shift); true
                             }
-                            selectionDragPos = null
-                            selectionDragActive = false
-                            handleDragActive = false
+
+                            Key.DirectionUp -> {
+                                if (softWrap) moveCaretVisual(-1, shift) else engine.moveCaretVertically(-1, shift); true
+                            }
+
+                            Key.DirectionDown -> {
+                                if (softWrap) moveCaretVisual(1, shift) else engine.moveCaretVertically(1, shift); true
+                            }
+
+                            Key.Backspace -> {
+                                if (!readOnly) engine.backspace(); true
+                            }
+
+                            Key.Delete -> {
+                                if (!readOnly) engine.deleteForward(); true
+                            }
+
+                            Key.Enter, Key.NumPadEnter -> {
+                                if (!readOnly) engine.insert("\n"); true
+                            }
+                            // 可编辑时 Tab 插入缩进并消费，防止事件回落到 Compose 默认焦点遍历、把焦点带走
+                            // （代码/YAML 编辑器里 Tab 跳焦点是致命的意外行为）。只读时放行，让 Tab 正常切换焦点。
+                            Key.Tab -> if (readOnly) false else {
+                                engine.insert("    "); true
+                            }
+
+                            else -> false
                         }
                     }
                 }
-            }
-    ) {
-        EditorCanvas(
-            engine = engine,
-            colors = colors,
-            textMeasurer = measurer,
-            textStyle = textStyle,
-            numberStyle = numberStyle,
-            lineHeightPx = lineHeightPx,
-            gutterWidthPx = gutterWidthPx,
-            padXPx = padXPx,
-            lineNumberMode = lineNumberMode,
-            scrollX = { scrollX.coerceIn(0f, maxScrollX) },
-            scrollY = { scrollY.coerceIn(0f, maxScrollY) },
-            // 与 scrollY/scrollX 传参同源钳制：maxScroll 骤减那一帧（底部捏合放大 / 收起 IME），行锚与像素
-            // 偏移都读钳制后的 scrollY，二者恒定锚同一窗口，不再顶部留一帧空白（re-clamp effect 下一帧才生效）。
-            // 入参 extraTopPx 为缩放预览的可见带上界（预缩放屏幕 y）：非缩放时为 0（等同原状），缩小时为负、
-            // 令起始行前移、补齐外扩露出的行。
-            firstVisibleLine = { extraTopPx -> (lineAtPx(scrollY.coerceIn(0f, maxScrollY) + extraTopPx) - 3).coerceAtLeast(0) },
-            lineTopPx = ::lineTopPx,
-            refBaselinePx = refBaselinePx,
-            caretHandleVisible = { caretHandleVisible && !readOnly },
-            handleRadiusPx = handleRadiusPx,
-            layoutFor = ::layoutFor,
-            charW = charWpx,
-            isGridLine = ::isGridLine,
-            gridRefBaseline = gridRefBaseline,
-            gridRefCursorTop = gridRefCursor.top,
-            gridRefCursorBottom = gridRefCursor.bottom,
-            // 缩放预览的运行态仿射（draw 阶段读）：previewScale 连续缩放系数、previewTx/previewTy 两轴平移（屏幕 px）。手势逐帧按
-            // 「绕当前双指中点缩放 + 中点位移平移」增量累积 → 四向自由跟手；换行下 previewTx 恒 0（正文/gutter 钉左）。恒 (1,0,0) 逐像素等价原状。
-            previewScale = { previewScale },
-            previewTx = { previewTx },
-            previewTy = { previewTy },
-            modifier = Modifier.fillMaxSize(),
-        )
-        // 光标独立图层：叠在正文之上，blink 只切本层 alpha、不重放正文画布（P10）。
-        CursorOverlay(
-            engine = engine,
-            colors = colors,
-            caretVisible = { !readOnly && blink },
-            scrollX = { scrollX.coerceIn(0f, maxScrollX) },
-            scrollY = { scrollY.coerceIn(0f, maxScrollY) },
-            lineTopPx = ::lineTopPx,
-            refBaselinePx = refBaselinePx,
-            layoutFor = ::layoutFor,
-            charW = charWpx,
-            isGridLine = ::isGridLine,
-            gridRefBaseline = gridRefBaseline,
-            gridRefCursorTop = gridRefCursor.top,
-            gridRefCursorBottom = gridRefCursor.bottom,
-            gutterWidthPx = gutterWidthPx,
-            padXPx = padXPx,
-            previewScale = { previewScale }, // 缩放预览期不画光标（正文在缩放、光标会脱节）
-            modifier = Modifier.fillMaxSize(),
-        )
-        // 放大镜：宿主在窗口级 Popup（可浮到编辑器上方的工具栏/状态栏空间），仅光标/选区端点手柄拖拽时（handleDragActive）出现。
-        MagnifierOverlay(
-            engine = engine,
-            colors = colors,
-            active = { handleDragActive },
-            // 连续手指位置（逐帧写）：光标手柄用 caretDragPos、选区端点用 selectionDragPos；胶囊据其 x 平滑跟手不跳。
-            dragPos = { caretDragPos ?: selectionDragPos },
-            caretVisible = { !readOnly && blink }, // 镜内光标随主编辑器同一 blink 闪烁
-            viewportWidth = { viewportWidth },     // 水平钳制到视口
-            contentTopInWindow = { contentTopInWindow }, // 允许胶囊上浮到窗口顶附近
-            scrollX = { scrollX.coerceIn(0f, maxScrollX) },
-            scrollY = { scrollY.coerceIn(0f, maxScrollY) },
-            lineTopPx = ::lineTopPx,
-            lineHeightPx = lineHeightPx,
-            refBaselinePx = refBaselinePx,
-            layoutFor = ::layoutFor,
-            textMeasurer = measurer,
-            textStyle = textStyle,
-            charW = charWpx,
-            isGridLine = ::isGridLine,
-            gridRefBaseline = gridRefBaseline,
-            gridRefCursorTop = gridRefCursor.top,
-            gridRefCursorBottom = gridRefCursor.bottom,
-            gutterWidthPx = gutterWidthPx,
-            padXPx = padXPx,
-        )
+                .focusRequester(focusRequester)
+                .focusable(interactionSource = interaction)
+                // 点按手势（只读时同样挂载：仅不弹软键盘、不接受编辑）。自定义而非 detectTapGestures：
+                // 后者一旦提供 onDoubleTap，就要等双击超时(~300ms)确认才回调 onTap，点击落光标发闷。这里
+                // 第一击抬手「立即」落光标 + 弹键盘；双击窗口内若来第二击，升级为选词（桌面双击、移动端双击皆可）。
+                // 长按拖拽由下方 block 接管——指针被其消费/取消时 waitForUpOrCancellation 返回 null，本 block 让位。
+                .pointerInput(engine) {
+                    awaitEachGesture {
+                        awaitFirstDown(requireUnconsumed = false)
+                        // 等抬手，但包一层长按超时：若超时前未抬手，说明这次已升级为长按（由下方 block 选词），
+                        // 本 block 直接让位、不落光标——否则纯长按选词后「不拖动直接抬手」会把刚选好的词塌成光标
+                        // （长按 block 不移动时不消费任何 change，waitForUpOrCancellation 拿到未消费的 up 会误触发）。
+                        val up = withTimeoutOrNull(viewConfiguration.longPressTimeoutMillis) {
+                            waitForUpOrCancellation()
+                        } ?: return@awaitEachGesture
+                        engine.setCursor(positionAtLive.value(up.position))
+                        focusRequester.requestFocus()
+                        if (!readOnlyLive.value) {
+                            engine.requestShowKeyboard?.invoke()
+                            pingCaretHandle() // 落光标后显示泪滴手柄（4s 后自动隐藏）
+                        }
+                        val second = withTimeoutOrNull(viewConfiguration.doubleTapTimeoutMillis) {
+                            awaitFirstDown(requireUnconsumed = false)
+                        }
+                        val up2 = if (second != null) waitForUpOrCancellation() else null
+                        if (up2 != null) {
+                            val w = engine.wordRangeAt(positionAtLive.value(up2.position))
+                            engine.setSelection(w.start, w.end)
+                            focusRequester.requestFocus()
+                        }
+                    }
+                }
+                .pointerInput(engine) {
+                    // 长按才进入选择：长按处先选中该词，随后拖拽扩展选区。普通拖拽不在此消费，
+                    // 于是落到上面的 scrollable 去滚动页面（移动端标准行为）。拖到上下边缘由
+                    // selectionDragPos 驱动的边缘自动滚动 effect 接管。只读模式同样可用（纯选择、不改文档）。
+                    detectDragGesturesAfterLongPress(
+                        onDragStart = { p ->
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress) // 长按进入选择时轻震确认
+                            val w = engine.wordRangeAt(positionAtLive.value(p))
+                            engine.setSelection(w.start, w.end)
+                            // 锚定整个初选词、按词粒度扩展（不用按下点作字符锚）——否则边缘自动滚动或首次拖拽会把
+                            // 刚选好的词塌成字符级光标（长按靠近视口边缘时尤其明显：一选中就瞬间消失）。
+                            selectionWordAnchor = w
+                            selectionAnchor = null
+                            focusRequester.requestFocus()
+                            selectionDragPos = p
+                            selectionDragActive = true
+                        },
+                        onDrag = { change, _ ->
+                            selectionDragPos = change.position
+                            selectionWordAnchor?.let { engine.selectWordRange(it, positionAtLive.value(change.position)) }
+                        },
+                        onDragEnd = { selectionDragPos = null; selectionDragActive = false; selectionWordAnchor = null },
+                        onDragCancel = { selectionDragPos = null; selectionDragActive = false; selectionWordAnchor = null },
+                    )
+                }
+                // 手柄拖拽：抓到光标/选区端点手柄即接管——重定位光标或调整选区端点；未抓到则不消费，让位给
+                // 滚动/点按/长按。本块是最内层 pointerInput，Main 阶段最先处理，故能先于 scrollable 抢占手柄拖拽；
+                // 命中盒经 caretRectLive 取当前帧几何，避开 stale-capture 坑。
+                .pointerInput(engine) {
+                    awaitEachGesture {
+                        val down = awaitFirstDown(requireUnconsumed = false)
+                        val p = down.position
+                        val sel = engine.selection
+                        fun hit(kind: HandleKind, at: TextPosition): Boolean {
+                            val r = caretRectLive.value(at) ?: return false
+                            return EditorGeometry.handleGeometry(kind, r[0], r[1], r[2], handleRadiusPx, handleSlopPx)
+                                .hitContains(p.x, p.y)
+                        }
+                        // 有选区时只看两端手柄（终点优先）；无选区且光标手柄可见、非只读时看光标手柄。
+                        var kind: HandleKind? = null
+                        var anchor: TextPosition? = null
+                        var grabbed: TextPosition? = null
+                        if (!sel.isEmpty) {
+                            when {
+                                hit(HandleKind.SelectionEnd, sel.end) -> {
+                                    kind = HandleKind.SelectionEnd; anchor = sel.start; grabbed = sel.end
+                                }
+
+                                hit(HandleKind.SelectionStart, sel.start) -> {
+                                    kind = HandleKind.SelectionStart; anchor = sel.end; grabbed = sel.start
+                                }
+                            }
+                        } else if (caretHandleVisible && !readOnlyLive.value && hit(HandleKind.Caret, sel.start)) {
+                            kind = HandleKind.Caret; grabbed = sel.start
+                        }
+                        if (kind == null) return@awaitEachGesture // 未抓到手柄，让位给滚动/点按/长按
+
+                        down.consume()
+                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove) // 抓住手柄时轻震确认
+                        // 纵向抓取偏移：目标点落在光标中部而非手指处（手指压在泪滴上、光标在其上方）。
+                        val gr = grabbed?.let { caretRectLive.value(it) }
+                        val grabDy = if (gr != null) (gr[1] + gr[2]) / 2f - p.y else 0f
+                        fun mapped(o: Offset): TextPosition = positionAtLive.value(Offset(o.x, o.y + grabDy))
+
+                        if (kind == HandleKind.Caret) {
+                            engine.setCursor(mapped(p)); pingCaretHandle()
+                            // 先等真正拖动（越过 touchSlop）才进入重定位 + 边缘自动滚动；纯点按（按下即抬起、位移不过 slop）
+                            // 只落光标、绝不激活自动滚动——否则光标本就靠边时，一按到边缘热区就被 caretDrag effect 当成「停在边缘」
+                            // 带着滚。以位移阈值区分：点=只落光标永不滚，拖=才滚，且自动滚是「拖拽进行时」的属性。
+                            // caretDragPos 存已含 grabDy 的目标点（与 mapped 同源），供 effect 判热区并逐帧落光标、可拖到视口外内容。
+                            val slop = awaitTouchSlopOrCancellation(down.id) { c, _ -> c.consume() }
+                            if (slop != null) {
+                                // 拖拽中每落到「新字符/行」补一次轻震（按位置去抖、非逐帧——一帧多次
+                                // 位移都在同一字符时不重复震）。比较落定后的 engine.caret（已 clamp）而非原始映射点：拖过
+                                // 短行行尾时 caret 停在行尾、原始列还在涨，比 caret 才不会空震。lastHaptic 初值为抓取帧的光标。
+                                var lastHaptic = engine.caret
+                                caretDragPos = Offset(slop.position.x, slop.position.y + grabDy)
+                                engine.setCursor(mapped(slop.position))
+                                if (engine.caret != lastHaptic) {
+                                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove); lastHaptic = engine.caret
+                                }
+                                caretDragActive = true
+                                handleDragActive = true
+                                drag(down.id) { change ->
+                                    caretDragPos = Offset(change.position.x, change.position.y + grabDy)
+                                    engine.setCursor(mapped(change.position))
+                                    if (engine.caret != lastHaptic) {
+                                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove); lastHaptic = engine.caret
+                                    }
+                                    change.consume()
+                                }
+                                caretDragActive = false
+                                handleDragActive = false
+                                caretDragPos = null
+                            }
+                            pingCaretHandle() // 抬手后重置 4s 计时
+                        } else {
+                            val a = anchor!!
+                            // 与光标手柄同理：越过 touchSlop 才算拖拽端点、激活延伸 + 边缘自动滚动；纯点按端点手柄（不过 slop）
+                            // 保持选区原样、不滚动——否则端点手柄本就靠边时，一按到边缘热区就被选区 effect 当成「停在边缘」带着滚。
+                            val slop = awaitTouchSlopOrCancellation(down.id) { c, _ -> c.consume() }
+                            if (slop != null) {
+                                selectionAnchor = a
+                                selectionWordAnchor = null // 端点拖拽走字符级锚
+                                // selectionDragPos 存已含 grabDy 的目标点（与 mapped/setSelection 同源）：否则边缘自动滚动 effect 会按
+                                // 手柄泪滴（在光标下方约 1.5 行）所在行做「按行闸停」，落到下方短行 → 误判行尾、横向不滚。与光标手柄一致。
+                                selectionDragPos = Offset(slop.position.x, slop.position.y + grabDy)
+                                selectionDragActive = true
+                                handleDragActive = true
+                                // 端点每落到「新字符/行」补一次轻震，与光标手柄一致；比较落定后的活动端 engine.caret
+                                // （setSelection 的 head，已 clamp）。lastHaptic 初值为抓取的端点位置。
+                                var lastHaptic = grabbed
+                                engine.setSelection(a, mapped(slop.position))
+                                if (engine.caret != lastHaptic) {
+                                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove); lastHaptic = engine.caret
+                                }
+                                drag(down.id) { change ->
+                                    selectionDragPos = Offset(change.position.x, change.position.y + grabDy)
+                                    engine.setSelection(a, mapped(change.position))
+                                    if (engine.caret != lastHaptic) {
+                                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove); lastHaptic = engine.caret
+                                    }
+                                    change.consume()
+                                }
+                                selectionDragPos = null
+                                selectionDragActive = false
+                                handleDragActive = false
+                            }
+                        }
+                    }
+                }
+        ) {
+            EditorCanvas(
+                engine = engine,
+                colors = colors,
+                textMeasurer = measurer,
+                textStyle = textStyle,
+                numberStyle = numberStyle,
+                lineHeightPx = lineHeightPx,
+                gutterWidthPx = gutterWidthPx,
+                padXPx = padXPx,
+                lineNumberMode = lineNumberMode,
+                scrollX = { scrollX.coerceIn(0f, maxScrollX) },
+                scrollY = { scrollY.coerceIn(0f, maxScrollY) },
+                // 与 scrollY/scrollX 传参同源钳制：maxScroll 骤减那一帧（底部捏合放大 / 收起 IME），行锚与像素
+                // 偏移都读钳制后的 scrollY，二者恒定锚同一窗口，不再顶部留一帧空白（re-clamp effect 下一帧才生效）。
+                // 入参 extraTopPx 为缩放预览的可见带上界（预缩放屏幕 y）：非缩放时为 0（等同原状），缩小时为负、
+                // 令起始行前移、补齐外扩露出的行。
+                firstVisibleLine = { extraTopPx -> (lineAtPx(scrollY.coerceIn(0f, maxScrollY) + extraTopPx) - 3).coerceAtLeast(0) },
+                lineTopPx = ::lineTopPx,
+                refBaselinePx = refBaselinePx,
+                caretHandleVisible = { caretHandleVisible && !readOnly },
+                handleRadiusPx = handleRadiusPx,
+                layoutFor = ::layoutFor,
+                charW = charWpx,
+                isGridLine = ::isGridLine,
+                gridRefBaseline = gridRefBaseline,
+                gridRefCursorTop = gridRefCursor.top,
+                gridRefCursorBottom = gridRefCursor.bottom,
+                // 缩放预览的运行态仿射（draw 阶段读）：previewScale 连续缩放系数、previewTx/previewTy 两轴平移（屏幕 px）。手势逐帧按
+                // 「绕当前双指中点缩放 + 中点位移平移」增量累积 → 四向自由跟手；换行下 previewTx 恒 0（正文/gutter 钉左）。恒 (1,0,0) 逐像素等价原状。
+                previewScale = { previewScale },
+                previewTx = { previewTx },
+                previewTy = { previewTy },
+                modifier = Modifier.fillMaxSize(),
+            )
+            // 光标独立图层：叠在正文之上，blink 只切本层 alpha、不重放正文画布（P10）。
+            CursorOverlay(
+                engine = engine,
+                colors = colors,
+                caretVisible = { !readOnly && blink },
+                scrollX = { scrollX.coerceIn(0f, maxScrollX) },
+                scrollY = { scrollY.coerceIn(0f, maxScrollY) },
+                lineTopPx = ::lineTopPx,
+                refBaselinePx = refBaselinePx,
+                layoutFor = ::layoutFor,
+                charW = charWpx,
+                isGridLine = ::isGridLine,
+                gridRefBaseline = gridRefBaseline,
+                gridRefCursorTop = gridRefCursor.top,
+                gridRefCursorBottom = gridRefCursor.bottom,
+                gutterWidthPx = gutterWidthPx,
+                padXPx = padXPx,
+                previewScale = { previewScale }, // 缩放预览期不画光标（正文在缩放、光标会脱节）
+                modifier = Modifier.fillMaxSize(),
+            )
+            // 放大镜：宿主在窗口级 Popup（可浮到编辑器上方的工具栏/状态栏空间），仅光标/选区端点手柄拖拽时（handleDragActive）出现。
+            MagnifierOverlay(
+                engine = engine,
+                colors = colors,
+                active = { handleDragActive },
+                // 连续手指位置（逐帧写）：光标手柄用 caretDragPos、选区端点用 selectionDragPos；胶囊据其 x 平滑跟手不跳。
+                dragPos = { caretDragPos ?: selectionDragPos },
+                caretVisible = { !readOnly && blink }, // 镜内光标随主编辑器同一 blink 闪烁
+                viewportWidth = { viewportWidth },     // 水平钳制到视口
+                contentTopInWindow = { contentTopInWindow }, // 允许胶囊上浮到窗口顶附近
+                scrollX = { scrollX.coerceIn(0f, maxScrollX) },
+                scrollY = { scrollY.coerceIn(0f, maxScrollY) },
+                lineTopPx = ::lineTopPx,
+                lineHeightPx = lineHeightPx,
+                refBaselinePx = refBaselinePx,
+                layoutFor = ::layoutFor,
+                textMeasurer = measurer,
+                textStyle = textStyle,
+                charW = charWpx,
+                isGridLine = ::isGridLine,
+                gridRefBaseline = gridRefBaseline,
+                gridRefCursorTop = gridRefCursor.top,
+                gridRefCursorBottom = gridRefCursor.bottom,
+                gutterWidthPx = gutterWidthPx,
+                padXPx = padXPx,
+            )
+        }
+        // 底部符号快捷条：只读不显示。点键只把 value 交 engine 插到光标处，**不主动聚焦/弹键盘**：
+        // 键用 detectTapGestures 不抢焦点——键盘开着时点键焦点不丢、IME 会话不销毁、键盘照旧不收；
+        // 键盘没开时点键也就不会意外唤起输入法（仅把符号落到光标）。insets 交给它自管底部沉浸。
+        if (showSymbolBar) {
+            SymbolBar(
+                symbols = symbols,
+                colors = colors,
+                onSymbol = { symbol -> engine.insert(symbol.value) },
+                windowInsets = bottomBarInsets,
+            )
+        }
     }
 }
 
