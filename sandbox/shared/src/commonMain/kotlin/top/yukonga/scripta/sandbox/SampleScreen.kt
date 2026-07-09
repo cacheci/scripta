@@ -59,8 +59,16 @@ fun SampleScreen(modifier: Modifier = Modifier) {
     val cTheme = if (dark) Color(0xFFF48FB1) else Color(0xFFC2185B)
     val cName = if (dark) Color(0xFF858585) else Color(0xFF6B6B6B)
 
-    // Task 3 replaces this with: val opener = rememberDocumentOpener(onOpened = { n, c -> ... }, onError = { errorMessage = it })
-    val openDocument: () -> Unit = { errorMessage = "打开功能将在 Plan 1 Task 3 接入" }
+    val opener = rememberDocumentOpener(
+        onOpened = { name, content ->
+            errorMessage = null
+            openedName = name
+            language = languageForName(name)
+            text = content
+        },
+        onError = { errorMessage = it },
+    )
+    SyncSystemBarsAppearance(dark)
 
     Column(
         modifier
@@ -81,7 +89,7 @@ fun SampleScreen(modifier: Modifier = Modifier) {
             BasicText(
                 text = "  打开  ",
                 style = TextStyle(color = cOpen, fontSize = 13.sp),
-                modifier = Modifier.clickable { openDocument() },
+                modifier = Modifier.clickable { opener.open() },
             )
             BasicText(
                 text = "  示例  ",
