@@ -54,6 +54,7 @@ import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.PointerType
 import androidx.compose.ui.input.pointer.isShiftPressed as isKeyboardShiftPressed
@@ -633,6 +634,8 @@ fun CodeEditor(
     // 否则会停在旧估算的「假底部」、选不到文档末尾（与 hitScrollY 同类修复）。
     val liveMaxScrollY = rememberUpdatedState(maxScrollY)
     val liveMaxScrollX = rememberUpdatedState(maxScrollX)
+    // 滚轮步长用的实时行高（避开 pointerInput(Unit) 的 stale-capture；随字号缩放）。
+    val liveLineHeightPx = rememberUpdatedState(lineHeightPx)
     // 缩放手势期做边界阻尼需按「预览缩放 s」算 maxScroll = s·内容尺寸 − 视口；内容尺寸经 rememberUpdatedState 提到当前帧，
     // 避开缩放手势 pointerInput(Unit) 闭包的 stale-capture（手势期无重排、内容尺寸恒定，故手势内取值稳定）。
     val liveContentHeight = rememberUpdatedState(contentHeight)
@@ -800,6 +803,25 @@ fun CodeEditor(
                 .onSizeChanged { viewportWidth = it.width.toFloat(); viewportHeight = it.height.toFloat() }
                 .onGloballyPositioned { contentTopInWindow = it.positionInWindow().y }
                 .scrollable2D(scroll2D, overscrollEffect = overscroll, interactionSource = scrollInteraction)
+                // 鼠标滚轮 / 触控板滚动：scrollable2D 只含拖拽、无滚轮节点（滚轮逻辑只在 1D scrollable 的
+                // MouseWheelScrollingLogic 里），故自行处理 Scroll 事件、据 scrollDelta 更新滚动量。clamp 用实时
+                // 上界 + 实时行高，避开 pointerInput(Unit) 的 stale-capture。
+                .pointerInput(Unit) {
+                    awaitPointerEventScope {
+                        while (true) {
+                            val event = awaitPointerEvent()
+                            if (event.type != PointerEventType.Scroll) continue
+                            var dx = 0f
+                            var dy = 0f
+                            event.changes.forEach { dx += it.scrollDelta.x; dy += it.scrollDelta.y }
+                            if (dx == 0f && dy == 0f) continue
+                            val step = liveLineHeightPx.value * 3f
+                            scrollY = (scrollY + dy * step).coerceIn(0f, liveMaxScrollY.value)
+                            scrollX = (scrollX + dx * step).coerceIn(0f, liveMaxScrollX.value)
+                            event.changes.forEach { it.consume() }
+                        }
+                    }
+                }
                 .pointerInput(Unit) {
                     // 双指缩放 + 缩放后单指跟手平移（一个连续手势内完成，避免与 scrollable 交接跳变）。≥2 指时累积连续 previewScale
                     // （仅 draw 阶段读 → 零重组/零重排/零重测）并消费；松手一次 commitZoom 换字号 + 重排。提交后若仍剩一指，**本处理器**
