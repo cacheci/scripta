@@ -36,6 +36,8 @@ plugins {
 }
 
 // :editor  — the reusable, self-drawn virtualized code editor library (common + android + desktop)
-// :sandbox — Android app used to run spikes and demo the editor on a real device
+// :sandbox — the demo app; KMP shared UI + one thin entry per platform (android app, desktop app)
 include(":editor")
-include(":sandbox")
+include(":sandbox:shared")
+include(":sandbox:android")
+include(":sandbox:desktop")

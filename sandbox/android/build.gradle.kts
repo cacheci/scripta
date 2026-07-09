@@ -47,6 +47,6 @@ kotlin {
 }
 
 dependencies {
-    implementation(projects.editor)
+    implementation(projects.sandbox.shared)
     implementation(libs.androidx.activity.compose)
 }
