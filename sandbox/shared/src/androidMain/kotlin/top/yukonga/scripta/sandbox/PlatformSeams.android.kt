@@ -12,6 +12,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -56,6 +57,8 @@ private fun readDocument(
             (display ?: "未命名") to body
         }
         onOpened(name, content)
+    } catch (e: CancellationException) {
+        throw e
     } catch (e: Exception) {
         onError("打开失败: ${e.message}")
     }

@@ -3,11 +3,11 @@ package top.yukonga.scripta.sandbox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.io.File
 import javax.swing.JFileChooser
 
 actual class DocumentOpener(private val launch: () -> Unit) {
@@ -30,8 +30,14 @@ private fun pickAndRead(
 ) = scope.launch {
     try {
         val file = withContext(Dispatchers.IO) {
-            val chooser = JFileChooser()
-            if (chooser.showOpenDialog(null) == JFileChooser.APPROVE_OPTION) chooser.selectedFile else null
+            // Swing components must be created/shown on the AWT event dispatch thread. This runs on a
+            // Dispatchers.IO thread (never the EDT), so invokeAndWait cannot self-deadlock.
+            var selected: java.io.File? = null
+            javax.swing.SwingUtilities.invokeAndWait {
+                val chooser = JFileChooser()
+                if (chooser.showOpenDialog(null) == JFileChooser.APPROVE_OPTION) selected = chooser.selectedFile
+            }
+            selected
         } ?: return@launch
         val content = withContext(Dispatchers.IO) {
             if (file.length() > MAX_OPEN_BYTES) {
@@ -40,6 +46,8 @@ private fun pickAndRead(
             file.readBytes().decodeToString()
         }
         onOpened(file.name, content)
+    } catch (e: CancellationException) {
+        throw e
     } catch (e: Exception) {
         onError("打开失败: ${e.message}")
     }
