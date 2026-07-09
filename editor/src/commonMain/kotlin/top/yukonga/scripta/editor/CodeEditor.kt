@@ -74,6 +74,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import top.yukonga.scripta.editor.input.editorTextInput
+import top.yukonga.scripta.editor.input.insertTypedCharacter
 import top.yukonga.scripta.editor.input.plainText
 import top.yukonga.scripta.editor.input.plainTextClipEntry
 import top.yukonga.scripta.editor.render.CursorOverlay
@@ -937,8 +938,10 @@ fun CodeEditor(
                             Key.Tab -> if (readOnly) false else {
                                 engine.insert("    "); true
                             }
-
-                            else -> false
+                            // 可打印字符回退：桌面上无 IME 参与的普通字符经 KeyEvent 到达（IME 提交走输入
+                            // 会话的 editText、不到这里），在此插入；Android 返回 false（字符由 InputConnection
+                            // 处理，避免双插）。
+                            else -> insertTypedCharacter(engine, ev, readOnly)
                         }
                     }
                 }
