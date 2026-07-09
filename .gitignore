@@ -34,3 +34,6 @@ google-services.json
 
 # Local planning docs (superpowers specs/plans) — not version-controlled
 docs/superpowers/
+
+# Subagent-driven-development progress ledger (scratch)
+.superpowers/
