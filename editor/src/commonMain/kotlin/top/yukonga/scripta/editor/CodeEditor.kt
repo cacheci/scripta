@@ -46,6 +46,7 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
@@ -872,7 +873,15 @@ fun CodeEditor(
                         if (active && !committed) commitZoomLive.value(fontStart, previewScale, previewTx, previewTy)
                     }
                 }
-                .editorTextInput(engine, enabled = !readOnly)
+                // caretRectInEditor：光标在内容本地坐标的矩形（复用 caretRectLive 的当前帧几何，含滚动/gutter），
+                // 桌面据此把 IME 候选窗定位到光标处；Android 忽略。r = [x, top, bottom]。
+                .editorTextInput(
+                    engine,
+                    enabled = !readOnly,
+                    caretRectInEditor = {
+                        caretRectLive.value(engine.caret)?.let { r -> Rect(r[0], r[1], r[0] + 1f, r[2]) }
+                    },
+                )
                 .onKeyEvent { ev ->
                     if (ev.type != KeyEventType.KeyDown) return@onKeyEvent false
                     if (ev.isCtrlPressed) {

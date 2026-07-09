@@ -11,6 +11,7 @@ import android.view.inputmethod.ExtractedTextRequest
 import android.view.inputmethod.InputMethodManager
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusEventModifierNode
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.focus.FocusState
 import androidx.compose.ui.node.ModifierNodeElement
 import androidx.compose.ui.platform.InspectorInfo
@@ -115,7 +116,8 @@ internal class EditorInputConnection(
     }
 }
 
-actual fun Modifier.editorTextInput(engine: EditorEngine, enabled: Boolean): Modifier =
+// caretRectInEditor 在 Android 忽略：候选栏/软键盘位置由系统输入法自行决定。
+actual fun Modifier.editorTextInput(engine: EditorEngine, enabled: Boolean, caretRectInEditor: () -> Rect?): Modifier =
     if (enabled) this then EditorTextInputElement(engine) else this
 
 private data class EditorTextInputElement(val engine: EditorEngine) :

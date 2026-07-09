@@ -41,14 +41,17 @@ import top.yukonga.scripta.editor.text.TextRange as EditorTextRange
  * state.selection / state.composition，在光标移动/外部编辑时自动结束预编辑——故这两个 getter 必须读
  * 引擎的快照 state（selectionOffsets/composingOffsets 分别读 engine.selection、engine.composing）。
  */
-actual fun Modifier.editorTextInput(engine: EditorEngine, enabled: Boolean): Modifier =
-    if (enabled) this then EditorTextInputElement(engine) else this
+actual fun Modifier.editorTextInput(engine: EditorEngine, enabled: Boolean, caretRectInEditor: () -> Rect?): Modifier =
+    if (enabled) this then EditorTextInputElement(engine, caretRectInEditor) else this
 
-private data class EditorTextInputElement(val engine: EditorEngine) :
-    ModifierNodeElement<EditorTextInputNode>() {
-    override fun create(): EditorTextInputNode = EditorTextInputNode(engine)
+private data class EditorTextInputElement(
+    val engine: EditorEngine,
+    val caretRectInEditor: () -> Rect?,
+) : ModifierNodeElement<EditorTextInputNode>() {
+    override fun create(): EditorTextInputNode = EditorTextInputNode(engine, caretRectInEditor)
     override fun update(node: EditorTextInputNode) {
         node.engine = engine
+        node.caretRectInEditor = caretRectInEditor
     }
 
     override fun InspectorInfo.inspectableProperties() {
@@ -56,8 +59,10 @@ private data class EditorTextInputElement(val engine: EditorEngine) :
     }
 }
 
-private class EditorTextInputNode(var engine: EditorEngine) :
-    Modifier.Node(), FocusEventModifierNode, PlatformTextInputModifierNode {
+private class EditorTextInputNode(
+    var engine: EditorEngine,
+    var caretRectInEditor: () -> Rect?,
+) : Modifier.Node(), FocusEventModifierNode, PlatformTextInputModifierNode {
 
     private var focusedJob: Job? = null
     private var focused = false
@@ -76,10 +81,10 @@ private class EditorTextInputNode(var engine: EditorEngine) :
     }
 
     /**
-     * 候选窗定位用的最佳努力矩形（spike）：取本节点自身在 root 中的左上角 + 行高的一竖条。
-     * 候选窗会贴编辑器左上角出现——足以验证预编辑；精确到光标的定位属后续细化（TODO）。
-     * requireLayoutCoordinates() 在节点/坐标未附着时抛 IllegalStateException（首帧布局前、拆除窗口），
-     * 这里全部吞成 null，返回 null 时候选窗退回系统默认位置，不崩。
+     * IME 候选窗定位矩形（root 坐标）：把编辑器传入的「光标在内容本地坐标系的矩形」按本节点在 root 中的
+     * 左上角平移即得——本节点即挂在编辑器内容 Box 上，故其 positionInRoot 正是该本地坐标系的原点。
+     * 拿不到光标矩形（首帧布局前 / 无有效光标）时退回本节点自身矩形，候选窗不贴光标但仍不崩。
+     * requireLayoutCoordinates() 在节点/坐标未附着时抛 IllegalStateException（首帧、拆窗），这里吞成 null。
      */
     private fun focusedRectInRoot(): Rect? {
         if (!isAttached) return null
@@ -89,7 +94,9 @@ private class EditorTextInputNode(var engine: EditorEngine) :
             return null
         }
         if (!coords.isAttached) return null
-        return Rect(coords.positionInRoot(), Size(1f, coords.size.height.toFloat()))
+        val origin = coords.positionInRoot()
+        val caret = caretRectInEditor()
+        return if (caret != null) caret.translate(origin) else Rect(origin, Size(1f, coords.size.height.toFloat()))
     }
 
     override fun onDetach() {
