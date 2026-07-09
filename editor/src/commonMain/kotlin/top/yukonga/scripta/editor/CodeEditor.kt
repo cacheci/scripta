@@ -1007,7 +1007,7 @@ fun CodeEditor(
                 .pointerInput(engine) {
                     awaitEachGesture {
                         val down = awaitFirstDown(requireUnconsumed = false)
-                        if (down.type != PointerType.Touch) return@awaitEachGesture // 鼠标交给最内层鼠标块处理
+                        if (down.type == PointerType.Mouse) return@awaitEachGesture // 仅鼠标让给最内层鼠标块；触控笔/未知指针走此触屏路径（勿漏掉 stylus）
                         lastInteractionWasMouse = false
                         // 等抬手，但包一层长按超时：若超时前未抬手，说明这次已升级为长按（由下方 block 选词），
                         // 本 block 直接让位、不落光标——否则纯长按选词后「不拖动直接抬手」会把刚选好的词塌成光标
@@ -1038,17 +1038,21 @@ fun CodeEditor(
                     // selectionDragPos 驱动的边缘自动滚动 effect 接管。只读模式同样可用（纯选择、不改文档）。
                     detectDragGesturesAfterLongPress(
                         onDragStart = { p ->
-                            lastInteractionWasMouse = false // 长按选择为触屏交互，恢复触摸手柄可见
-                            haptic.performHapticFeedback(HapticFeedbackType.LongPress) // 长按进入选择时轻震确认
-                            val w = engine.wordRangeAt(positionAtLive.value(p))
-                            engine.setSelection(w.start, w.end)
-                            // 锚定整个初选词、按词粒度扩展（不用按下点作字符锚）——否则边缘自动滚动或首次拖拽会把
-                            // 刚选好的词塌成字符级光标（长按靠近视口边缘时尤其明显：一选中就瞬间消失）。
-                            selectionWordAnchor = w
-                            selectionAnchor = null
-                            focusRequester.requestFocus()
-                            selectionDragPos = p
-                            selectionDragActive = true
+                            // 鼠标静止长按也会触发本回调（awaitLongPressOrCancellation 不校验初始 down 的消费，
+                            // 无后续移动即超时触发）；此时 lastInteractionWasMouse 已被最内层鼠标块置 true，跳过——
+                            // 否则会给鼠标选区错误选词并重新露出触屏手柄。触屏长按时该标记已由点按块置 false。
+                            if (!lastInteractionWasMouse) {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress) // 长按进入选择时轻震确认
+                                val w = engine.wordRangeAt(positionAtLive.value(p))
+                                engine.setSelection(w.start, w.end)
+                                // 锚定整个初选词、按词粒度扩展（不用按下点作字符锚）——否则边缘自动滚动或首次拖拽会把
+                                // 刚选好的词塌成字符级光标（长按靠近视口边缘时尤其明显：一选中就瞬间消失）。
+                                selectionWordAnchor = w
+                                selectionAnchor = null
+                                focusRequester.requestFocus()
+                                selectionDragPos = p
+                                selectionDragActive = true
+                            }
                         },
                         onDrag = { change, _ ->
                             selectionDragPos = change.position
@@ -1064,7 +1068,7 @@ fun CodeEditor(
                 .pointerInput(engine) {
                     awaitEachGesture {
                         val down = awaitFirstDown(requireUnconsumed = false)
-                        if (down.type != PointerType.Touch) return@awaitEachGesture // 手柄手势仅触屏；鼠标交给最内层鼠标块
+                        if (down.type == PointerType.Mouse) return@awaitEachGesture // 仅鼠标让给最内层鼠标块；触控笔/未知指针可抓手柄
                         val p = down.position
                         val sel = engine.selection
                         fun hit(kind: HandleKind, at: TextPosition): Boolean {
@@ -1092,6 +1096,7 @@ fun CodeEditor(
                         if (kind == null) return@awaitEachGesture // 未抓到手柄，让位给滚动/点按/长按
 
                         down.consume()
+                        lastInteractionWasMouse = false // 触屏/触控笔抓手柄：确保手柄可见（此前若为鼠标选区、手柄被抑制）
                         haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove) // 抓住手柄时轻震确认
                         // 纵向抓取偏移：目标点落在光标中部而非手指处（手指压在泪滴上、光标在其上方）。
                         val gr = grabbed?.let { caretRectLive.value(it) }

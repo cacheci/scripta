@@ -8,7 +8,10 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.File
+import java.io.IOException
 import javax.swing.JFileChooser
+import javax.swing.SwingUtilities
 
 actual class DocumentOpener(private val launch: () -> Unit) {
     actual fun open() = launch()
@@ -32,8 +35,8 @@ private fun pickAndRead(
         val file = withContext(Dispatchers.IO) {
             // Swing components must be created/shown on the AWT event dispatch thread. This runs on a
             // Dispatchers.IO thread (never the EDT), so invokeAndWait cannot self-deadlock.
-            var selected: java.io.File? = null
-            javax.swing.SwingUtilities.invokeAndWait {
+            var selected: File? = null
+            SwingUtilities.invokeAndWait {
                 val chooser = JFileChooser()
                 if (chooser.showOpenDialog(null) == JFileChooser.APPROVE_OPTION) selected = chooser.selectedFile
             }
@@ -41,7 +44,7 @@ private fun pickAndRead(
         } ?: return@launch
         val content = withContext(Dispatchers.IO) {
             if (file.length() > MAX_OPEN_BYTES) {
-                throw java.io.IOException("文件过大（${file.length() / 1024 / 1024}MB），上限 ${MAX_OPEN_BYTES / 1024 / 1024}MB")
+                throw IOException("文件过大（${file.length() / 1024 / 1024}MB），上限 ${MAX_OPEN_BYTES / 1024 / 1024}MB")
             }
             file.readBytes().decodeToString()
         }
