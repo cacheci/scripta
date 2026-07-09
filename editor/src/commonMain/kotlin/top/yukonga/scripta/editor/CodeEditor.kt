@@ -50,7 +50,6 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
-import androidx.compose.ui.input.key.isCtrlPressed
 import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
@@ -74,10 +73,12 @@ import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
+import top.yukonga.scripta.editor.input.EditorKeyCommand
 import top.yukonga.scripta.editor.input.editorTextInput
 import top.yukonga.scripta.editor.input.insertTypedCharacter
 import top.yukonga.scripta.editor.input.plainText
 import top.yukonga.scripta.editor.input.plainTextClipEntry
+import top.yukonga.scripta.editor.input.resolveEditorKeyCommand
 import top.yukonga.scripta.editor.render.CursorOverlay
 import top.yukonga.scripta.editor.render.EditorCanvas
 import top.yukonga.scripta.editor.render.EditorGeometry
@@ -343,6 +344,9 @@ fun CodeEditor(
         val row = (y / lineHeightPx).toInt().coerceAtLeast(0)
         return if (softWrap) rowIndex.lineAtRow(row) else row.coerceIn(0, (lineCount - 1).coerceAtLeast(0))
     }
+
+    // 翻页行数：约一屏可见行减 1 行重叠（至少 1）。viewportHeight/lineHeightPx 为实时几何。
+    fun pageLines(): Int = ((viewportHeight / lineHeightPx).toInt() - 1).coerceAtLeast(1)
 
     // 量化滚动：组合只订阅「首个可见行」，跨行才重组；同一行内的滚动仅由 EditorCanvas 在 draw 阶段读
     // 像素级 scrollY/scrollX 平滑重绘，不再每滚 1px 全量重组。derivedStateOf 仅在整数结果变化时通知读者。
@@ -884,76 +888,73 @@ fun CodeEditor(
                 )
                 .onKeyEvent { ev ->
                     if (ev.type != KeyEventType.KeyDown) return@onKeyEvent false
-                    if (ev.isCtrlPressed) {
-                        when (ev.key) {
-                            // 全选/复制在只读模式下依然可用（只读恰恰最需要可选可复制）。
-                            Key.A -> {
-                                engine.selectAll(); true
+                    val shift = ev.isShiftPressed
+                    // 平台各异的剪贴板 / 导航快捷键先经 resolveEditorKeyCommand 归一（mac=Cmd/Opt，其余=Ctrl）。
+                    resolveEditorKeyCommand(ev)?.let { cmd ->
+                        when (cmd) {
+                            // 全选/复制只读下也可用；剪切/粘贴改文档，只读消费但不执行。
+                            EditorKeyCommand.SelectAll -> engine.selectAll()
+                            EditorKeyCommand.Copy -> engine.selectedText()?.let { txt ->
+                                clipboardScope.launch { clipboard.setClipEntry(plainTextClipEntry(txt)) }
                             }
 
-                            Key.C -> {
-                                engine.selectedText()?.let { txt ->
-                                    clipboardScope.launch { clipboard.setClipEntry(plainTextClipEntry(txt)) }
-                                }; true
-                            }
-                            // 剪切/粘贴会改动文档，只读时消费事件但不执行。
-                            Key.X -> {
-                                if (!readOnly) engine.selectedText()?.let { txt ->
-                                    clipboardScope.launch { clipboard.setClipEntry(plainTextClipEntry(txt)) }
-                                    engine.replaceSelection("")
-                                }; true
+                            EditorKeyCommand.Cut -> if (!readOnly) engine.selectedText()?.let { txt ->
+                                clipboardScope.launch { clipboard.setClipEntry(plainTextClipEntry(txt)) }
+                                engine.replaceSelection("")
                             }
 
-                            Key.V -> {
-                                if (!readOnly) clipboardScope.launch {
-                                    clipboard.getClipEntry()?.plainText()?.let { engine.insert(it) }
-                                }; true
+                            EditorKeyCommand.Paste -> if (!readOnly) clipboardScope.launch {
+                                clipboard.getClipEntry()?.plainText()?.let { engine.insert(it) }
                             }
 
-                            else -> false
+                            EditorKeyCommand.WordLeft -> engine.moveCaretByWord(-1, shift)
+                            EditorKeyCommand.WordRight -> engine.moveCaretByWord(1, shift)
+                            EditorKeyCommand.LineStart -> engine.moveCaretToLineStart(shift)
+                            EditorKeyCommand.LineEnd -> engine.moveCaretToLineEnd(shift)
+                            EditorKeyCommand.DocStart -> engine.moveCaretToDocStart(shift)
+                            EditorKeyCommand.DocEnd -> engine.moveCaretToDocEnd(shift)
+                            EditorKeyCommand.PageUp -> engine.movePage(-1, pageLines(), shift)
+                            EditorKeyCommand.PageDown -> engine.movePage(1, pageLines(), shift)
                         }
-                    } else {
-                        val shift = ev.isShiftPressed
-                        // composing（预编辑）进行中，方向/回车/退格等键由输入法消费、不回落到此处，故这些处理器
-                        // 无需按 composing 设闸；可打印字符路径（insertTypedCharacter）则显式设了 composing 闸。
-                        when (ev.key) {
-                            Key.DirectionLeft -> {
-                                engine.moveCaretHorizontally(-1, shift); true
-                            }
-
-                            Key.DirectionRight -> {
-                                engine.moveCaretHorizontally(1, shift); true
-                            }
-
-                            Key.DirectionUp -> {
-                                if (softWrap) moveCaretVisual(-1, shift) else engine.moveCaretVertically(-1, shift); true
-                            }
-
-                            Key.DirectionDown -> {
-                                if (softWrap) moveCaretVisual(1, shift) else engine.moveCaretVertically(1, shift); true
-                            }
-
-                            Key.Backspace -> {
-                                if (!readOnly) engine.backspace(); true
-                            }
-
-                            Key.Delete -> {
-                                if (!readOnly) engine.deleteForward(); true
-                            }
-
-                            Key.Enter, Key.NumPadEnter -> {
-                                if (!readOnly) engine.insert("\n"); true
-                            }
-                            // 可编辑时 Tab 插入缩进并消费，防止事件回落到 Compose 默认焦点遍历、把焦点带走
-                            // （代码/YAML 编辑器里 Tab 跳焦点是致命的意外行为）。只读时放行，让 Tab 正常切换焦点。
-                            Key.Tab -> if (readOnly) false else {
-                                engine.insert("    "); true
-                            }
-                            // 可打印字符回退：桌面上无 IME 参与的普通字符经 KeyEvent 到达（IME 提交走输入
-                            // 会话的 editText、不到这里），在此插入；Android 返回 false（字符由 InputConnection
-                            // 处理，避免双插）。
-                            else -> insertTypedCharacter(engine, ev, readOnly)
+                        return@onKeyEvent true
+                    }
+                    // 平台无关：纯方向 / 编辑 / 字符键。
+                    // composing（预编辑）进行中，方向/回车/退格等键由输入法消费、不回落到此处，故这些处理器
+                    // 无需按 composing 设闸；可打印字符路径（insertTypedCharacter）则显式设了 composing 闸。
+                    when (ev.key) {
+                        Key.DirectionLeft -> {
+                            engine.moveCaretHorizontally(-1, shift); true
                         }
+
+                        Key.DirectionRight -> {
+                            engine.moveCaretHorizontally(1, shift); true
+                        }
+
+                        Key.DirectionUp -> {
+                            if (softWrap) moveCaretVisual(-1, shift) else engine.moveCaretVertically(-1, shift); true
+                        }
+
+                        Key.DirectionDown -> {
+                            if (softWrap) moveCaretVisual(1, shift) else engine.moveCaretVertically(1, shift); true
+                        }
+
+                        Key.Backspace -> {
+                            if (!readOnly) engine.backspace(); true
+                        }
+
+                        Key.Delete -> {
+                            if (!readOnly) engine.deleteForward(); true
+                        }
+
+                        Key.Enter, Key.NumPadEnter -> {
+                            if (!readOnly) engine.insert("\n"); true
+                        }
+                        // 可编辑时 Tab 插入缩进并消费，防止焦点遍历把焦点带走；只读放行焦点切换。
+                        Key.Tab -> if (readOnly) false else {
+                            engine.insert("    "); true
+                        }
+                        // 可打印字符回退（桌面无 IME 参与的字符经 KeyEvent 到达；Android 走 InputConnection、返回 false）。
+                        else -> insertTypedCharacter(engine, ev, readOnly)
                     }
                 }
                 .focusRequester(focusRequester)
