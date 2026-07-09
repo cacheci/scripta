@@ -13,6 +13,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.dropShadow
 import androidx.compose.ui.draw.innerShadow
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
@@ -434,17 +435,23 @@ fun CursorOverlay(
 
 // 放大镜（圆角胶囊）几何常量：固定物理尺寸（dp），内容按 [MAGNIFIER_SCALE] 放大。真机可再调。
 private val MAGNIFIER_WIDTH = 132.dp   // 胶囊宽
-private val MAGNIFIER_HEIGHT = 52.dp   // 胶囊高（角半径 = 高/2 → 两端半圆）
+private val MAGNIFIER_HEIGHT = 82.dp   // 胶囊高（角半径 = 高/2 → 两端半圆）
 private val MAGNIFIER_GAP = 22.dp      // 胶囊底与光标顶的间距（浮在其上、指尖不遮）
 private val MAGNIFIER_MARGIN = 8.dp    // 窗口边缘留白（胶囊贴边钳住不出界，含上浮到窗口顶时）
-private val MAGNIFIER_POPUP_PAD = 16.dp // 胶囊四周留白：容纳阴影/内阴影/玻璃折射外溢，并作 Popup 内容尺寸的边距
+private val MAGNIFIER_POPUP_PAD = 30.dp // 胶囊四周留白：须 ≥ 悬浮投影的模糊+下沉 falloff，否则淡入淡出时投影软边被最外 alpha 层的离屏缓冲硬裁
 private val MAGNIFIER_BORDER = 1.dp
 private const val MAGNIFIER_SCALE = 1.4f
+
+// 悬浮投影（真·dropShadow，画在玻璃层之下）：比旧的画在玻璃内的小阴影更大更柔更沉 → 放大镜浮得更高、更像悬空水珠。
+private val MAGNIFIER_DROP_RADIUS = 14.dp
+private val MAGNIFIER_DROP_DY = 5.dp
+private const val MAGNIFIER_DROP_ALPHA = 0.30f
 
 // 液态玻璃边（折射+色散，无模糊）参数——见 [magnifierGlassRenderEffect]。Android 13+ 与桌面(skiko) 生效，可再调。
 private val MAGNIFIER_REFRACTION_HEIGHT = 16.dp // 折射带自胶囊边缘向内的深度
 private val MAGNIFIER_REFRACTION_AMOUNT = 10.dp // 边缘最大折射位移
 private const val MAGNIFIER_DISPERSION = 0.15f  // 色散强度（0=无、越大彩边越明显）
+private const val MAGNIFIER_DEPTH_EFFECT = 1f    // 折射方向向「从中心的径向」混合的强度：0=纯边缘法线(平)、1=域向(鼓起玻璃感)。
 
 
 /** 当帧放大镜几何：光标屏幕位置、连续参考点、胶囊矩形——[MagnifierOverlay] 的 graphicsLayer（算玻璃边矩形）与 draw 共用，保证对齐。 */
@@ -537,6 +544,7 @@ fun MagnifierOverlay(
                 cornerRadius = MAGNIFIER_HEIGHT.toPx() / 2f,
                 refractionHeight = MAGNIFIER_REFRACTION_HEIGHT.toPx(),
                 refractionAmount = MAGNIFIER_REFRACTION_AMOUNT.toPx(),
+                depthEffect = MAGNIFIER_DEPTH_EFFECT,
                 chromaticAberration = MAGNIFIER_DISPERSION,
             )
         }
@@ -611,14 +619,34 @@ fun MagnifierOverlay(
                 offset = IntOffset(-padPx, -padPx), // 胶囊在 Popup 内容里位于 (pad,pad)，故内容左上 = 锚(胶囊左上) − pad
                 properties = PopupProperties(focusable = false, clippingEnabled = false),
             ) {
-                // 内容分两层：① 玻璃 Canvas（放大内容 + 折射/色散）；② 其上叠一层胶囊形 innerShadow overlay（不进玻璃层、不被折射）。
-                Box(Modifier.size(MAGNIFIER_WIDTH + MAGNIFIER_POPUP_PAD * 2, MAGNIFIER_HEIGHT + MAGNIFIER_POPUP_PAD * 2)) {
+                // 内容分三层，整组套【一个】alpha 层统一淡入淡出（放在最外 wrapping Box、缓冲含四周 pad → 悬浮投影软边不被离屏缓冲
+                // 边界硬裁；也避免每层各自半透叠加的脏合成）：① 底层悬浮投影（真·dropShadow、在玻璃之下）；② 玻璃 Canvas（放大内容+折射/色散）；
+                // ③ 顶层玻璃质感 overlay（内阴影收边 + 凸面薄顶光/底阴 + 顶缘光，均在玻璃之上、不被折射）——三层叠出"浮在屏上的水珠"立体感。
+                Box(
+                    Modifier
+                        .size(MAGNIFIER_WIDTH + MAGNIFIER_POPUP_PAD * 2, MAGNIFIER_HEIGHT + MAGNIFIER_POPUP_PAD * 2)
+                        .graphicsLayer { this.alpha = alpha.value },
+                ) {
+                // ① 悬浮投影：胶囊形 dropShadow，画在玻璃层之下（首个子节点）。
+                Box(
+                    Modifier
+                        .offset(MAGNIFIER_POPUP_PAD, MAGNIFIER_POPUP_PAD)
+                        .size(MAGNIFIER_WIDTH, MAGNIFIER_HEIGHT)
+                        .dropShadow(
+                            shape = RoundedCornerShape(percent = 50),
+                            shadow = Shadow(
+                                radius = MAGNIFIER_DROP_RADIUS,
+                                spread = 0.dp,
+                                color = Color.Black.copy(alpha = MAGNIFIER_DROP_ALPHA),
+                                offset = DpOffset(0.dp, MAGNIFIER_DROP_DY),
+                            ),
+                        ),
+                )
                 Canvas(
                     Modifier
                         .size(MAGNIFIER_WIDTH + MAGNIFIER_POPUP_PAD * 2, MAGNIFIER_HEIGHT + MAGNIFIER_POPUP_PAD * 2)
                         .graphicsLayer {
-                            this.alpha = alpha.value
-                            renderEffect = glassEffect // 恒定：胶囊在图层内固定位置，uniform 不变、只建一次
+                            renderEffect = glassEffect // 恒定：胶囊在图层内固定位置，uniform 不变、只建一次；alpha 由最外 wrapping 层统一施加
                         }
                 ) {
                     val g = computeLoupe(this) ?: return@Canvas
@@ -632,14 +660,7 @@ fun MagnifierOverlay(
                     val sel = engine.selection // 有选区（拖端点）→ 画选区底色、不画光标；空选区（拖光标）→ 画随 blink 的光标
                     val loupeRect = Rect(pad, pad, pad + wl, pad + hl) // Popup 内容局部坐标（胶囊固定于此、玻璃 uniform 与之对齐）
 
-                    // 轻微下偏阴影 → 悬浮感
-                    drawRoundRect(
-                        color = Color.Black.copy(alpha = 0.18f),
-                        topLeft = Offset(loupeRect.left, loupeRect.top + 2f),
-                        size = loupeRect.size,
-                        cornerRadius = CornerRadius(radius, radius),
-                    )
-
+                    // 悬浮投影不在此画：已移到玻璃层【之下】的真·dropShadow（见 Popup 内容第 ① 层），更大更柔、浮得更高。
                     val clip = Path().apply { addRoundRect(RoundRect(loupeRect, CornerRadius(radius, radius))) }
                     clipPath(clip) {
                         drawRect(colors.background, topLeft = loupeRect.topLeft, size = loupeRect.size)
@@ -742,21 +763,15 @@ fun MagnifierOverlay(
                         )
                     }
                 }
-                // ② 内阴影 overlay：叠在玻璃 Canvas【之上】、不进玻璃 renderEffect → 不被折射/色散、不与玻璃 rim 叠加。
-                // 用 Compose 新 innerShadow（平滑高斯，非离散描边）；胶囊形对齐固定胶囊位置 (pad,pad)+尺寸，随 loupe 同步淡入淡出。
+                // ③ 玻璃质感 overlay：只留一层 innerShadow 收边。玻璃的"鼓起"改由折射 shader 的 depthEffect 提供（见 magnifierGlassRenderEffect）——
+                // overlay 不再画渐变/rim（那些盖在正文上的手绘光看着不自然，已撤）。
                 Box(
                     Modifier
                         .offset(MAGNIFIER_POPUP_PAD, MAGNIFIER_POPUP_PAD)
                         .size(MAGNIFIER_WIDTH, MAGNIFIER_HEIGHT)
-                        .graphicsLayer { this.alpha = alpha.value }
                         .innerShadow(
                             shape = RoundedCornerShape(percent = 50),
-                            shadow = Shadow(
-                                radius = 6.dp,
-                                spread = 0.dp,
-                                color = Color.Black.copy(alpha = 0.30f),
-                                offset = DpOffset(0.dp, 1.dp),
-                            ),
+                            shadow = Shadow(radius = 14.dp, spread = 0.dp, color = Color.Black.copy(alpha = 0.25f), offset = DpOffset(0.dp, 1.dp)),
                         ),
                 )
                 }

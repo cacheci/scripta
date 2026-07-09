@@ -22,6 +22,7 @@ actual fun magnifierGlassRenderEffect(
     cornerRadius: Float,
     refractionHeight: Float,
     refractionAmount: Float,
+    depthEffect: Float,
     chromaticAberration: Float,
 ): RenderEffect? {
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return null // RuntimeShader/AGSL 需 Android 13+
@@ -32,7 +33,7 @@ actual fun magnifierGlassRenderEffect(
     shader.setFloatUniform("cornerRadii", cornerRadius, cornerRadius, cornerRadius, cornerRadius)
     shader.setFloatUniform("refractionHeight", refractionHeight)
     shader.setFloatUniform("refractionAmount", -refractionAmount) // 负号：沿梯度反向（向内）折射，呈透镜边
-    shader.setFloatUniform("depthEffect", 0f)
+    shader.setFloatUniform("depthEffect", depthEffect)
     shader.setFloatUniform("chromaticAberration", chromaticAberration)
     return AndroidRenderEffect.createRuntimeShaderEffect(shader, "content").asComposeRenderEffect()
 }

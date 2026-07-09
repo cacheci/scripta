@@ -17,6 +17,7 @@ actual fun magnifierGlassRenderEffect(
     cornerRadius: Float,
     refractionHeight: Float,
     refractionAmount: Float,
+    depthEffect: Float,
     chromaticAberration: Float,
 ): RenderEffect? {
     if (width <= 0f || height <= 0f || refractionHeight <= 0f || refractionAmount <= 0f) return null
@@ -26,7 +27,7 @@ actual fun magnifierGlassRenderEffect(
     builder.uniform("cornerRadii", cornerRadius, cornerRadius, cornerRadius, cornerRadius)
     builder.uniform("refractionHeight", refractionHeight)
     builder.uniform("refractionAmount", -refractionAmount) // 负号：沿梯度反向（向内）折射，呈透镜边
-    builder.uniform("depthEffect", 0f)
+    builder.uniform("depthEffect", depthEffect)
     builder.uniform("chromaticAberration", chromaticAberration)
     // input=null → 子 shader "content" 绑定滤镜源（作用图层自身内容）；与 Android createRuntimeShaderEffect 语义一致。
     return ImageFilter.makeRuntimeShader(builder, "content", null).asComposeRenderEffect()

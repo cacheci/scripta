@@ -11,8 +11,9 @@ import androidx.compose.ui.graphics.RenderEffect
  * 仅 **Android < 13**（无 AGSL）返回 `null`，放大镜退化为普通圆角边（见各 actual 与 [isMagnifierGlassSupported]）。
  *
  * 坐标系为「作用图层的像素空间」：[left]/[top]/[width]/[height] 为胶囊在该图层内的矩形；[cornerRadius] 角半径；
- * [refractionHeight] 折射带自边缘向内的深度；[refractionAmount] 边缘最大折射位移；[chromaticAberration] 色散强度
- * （0=无、~0.1 轻微、~0.2 明显）。返回 `null` 表示当前平台/参数不产生效果。
+ * [refractionHeight] 折射带自边缘向内的深度；[refractionAmount] 边缘最大折射位移；[depthEffect] 折射方向向「从中心的径向」
+ * 混合的强度（0=纯边缘法线折射/平、1=域向、鼓起玻璃感；[chromaticAberration] 色散强度（0=无、~0.1 轻微、~0.2 明显）。
+ * 返回 `null` 表示当前平台/参数不产生效果。
  */
 expect fun magnifierGlassRenderEffect(
     left: Float,
@@ -22,6 +23,7 @@ expect fun magnifierGlassRenderEffect(
     cornerRadius: Float,
     refractionHeight: Float,
     refractionAmount: Float,
+    depthEffect: Float,
     chromaticAberration: Float,
 ): RenderEffect?
 
