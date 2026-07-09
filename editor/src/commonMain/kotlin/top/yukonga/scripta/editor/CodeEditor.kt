@@ -54,6 +54,10 @@ import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.pointer.PointerType
+import androidx.compose.ui.input.pointer.isShiftPressed as isKeyboardShiftPressed
+import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
@@ -467,6 +471,8 @@ fun CodeEditor(
     // selectionAnchor：字符级锚（手柄端点拖拽）；selectionWordAnchor：词级锚（长按选词后按词扩展）。
     var selectionAnchor by remember { mutableStateOf<TextPosition?>(null) }
     var selectionWordAnchor by remember { mutableStateOf<TextRange?>(null) }
+    // selectionLineAnchor：行级锚（鼠标三击选行后按行扩展）——仅鼠标块设置；边缘自动滚动 effect 据此按整行延伸。
+    var selectionLineAnchor by remember { mutableStateOf<Int?>(null) }
     // 逐帧写入的拖拽坐标：只被 effect 协程体轮询，组合/绘制均不读——故写它不触发任何重组。
     var selectionDragPos by remember { mutableStateOf<Offset?>(null) }
     // 只在拖拽「起/止」翻转的布尔，专作边缘自动滚动 effect 的 key。不能用 `selectionDragPos != null` 作 key：
@@ -480,6 +486,10 @@ fun CodeEditor(
     // 放大镜显示条件：仅「光标手柄 / 选区端点手柄」拖拽时（下方最内层 pointerInput 的两支）为真——不含长按选择拖拽
     // （那支只置 selectionDragActive）。逐帧被放大镜层在 draw 读、只起/止翻转 → 不重组。
     var handleDragActive by remember { mutableStateOf(false) }
+
+    // 最近一次指针交互是否来自鼠标：鼠标块置 true、触屏（点按 / 长按）置 false。为 true 时隐藏泪滴光标手柄与选区端点手柄
+    // （桌面/鼠标场景不需要触摸取词手柄；放大镜本就只在触屏手柄拖拽的 handleDragActive 下出现，故不受影响）。
+    var lastInteractionWasMouse by remember { mutableStateOf(false) }
 
     var blink by remember { mutableStateOf(true) }
     // 选区变化即重置闪烁相位（光标一移立即可见）。用 snapshotFlow 在快照观察者里读 selection，而非把它当组合期
@@ -664,7 +674,8 @@ fun CodeEditor(
             val pos = selectionDragPos ?: break
             val wordAnchor = selectionWordAnchor
             val charAnchor = selectionAnchor
-            if (wordAnchor == null && charAnchor == null) break
+            val lineAnchor = selectionLineAnchor
+            if (wordAnchor == null && charAnchor == null && lineAnchor == null) break
             val maxY = liveMaxScrollY.value
             val maxX = liveMaxScrollX.value
             val stepY = edgeAutoScrollSpeed(pos.y, viewportHeight, lineHeightPx)
@@ -689,8 +700,16 @@ fun CodeEditor(
                 scrollY = newY
                 scrollX = newX
                 val caret = positionAtWithScroll(pos, newY, newX)
-                if (wordAnchor != null) engine.selectWordRange(wordAnchor, caret)
-                else charAnchor?.let { engine.setSelection(it, caret) }
+                when {
+                    wordAnchor != null -> engine.selectWordRange(wordAnchor, caret)
+                    lineAnchor != null -> {
+                        val a = minOf(lineAnchor, caret.line)
+                        val b = maxOf(lineAnchor, caret.line)
+                        engine.setSelection(TextPosition(a, 0), TextPosition(b, engine.buffer.lineLength(b)))
+                    }
+
+                    else -> charAnchor?.let { engine.setSelection(it, caret) }
+                }
             }
             withFrameNanos { }
         }
@@ -965,7 +984,9 @@ fun CodeEditor(
                 // 长按拖拽由下方 block 接管——指针被其消费/取消时 waitForUpOrCancellation 返回 null，本 block 让位。
                 .pointerInput(engine) {
                     awaitEachGesture {
-                        awaitFirstDown(requireUnconsumed = false)
+                        val down = awaitFirstDown(requireUnconsumed = false)
+                        if (down.type != PointerType.Touch) return@awaitEachGesture // 鼠标交给最内层鼠标块处理
+                        lastInteractionWasMouse = false
                         // 等抬手，但包一层长按超时：若超时前未抬手，说明这次已升级为长按（由下方 block 选词），
                         // 本 block 直接让位、不落光标——否则纯长按选词后「不拖动直接抬手」会把刚选好的词塌成光标
                         // （长按 block 不移动时不消费任何 change，waitForUpOrCancellation 拿到未消费的 up 会误触发）。
@@ -995,6 +1016,7 @@ fun CodeEditor(
                     // selectionDragPos 驱动的边缘自动滚动 effect 接管。只读模式同样可用（纯选择、不改文档）。
                     detectDragGesturesAfterLongPress(
                         onDragStart = { p ->
+                            lastInteractionWasMouse = false // 长按选择为触屏交互，恢复触摸手柄可见
                             haptic.performHapticFeedback(HapticFeedbackType.LongPress) // 长按进入选择时轻震确认
                             val w = engine.wordRangeAt(positionAtLive.value(p))
                             engine.setSelection(w.start, w.end)
@@ -1015,11 +1037,12 @@ fun CodeEditor(
                     )
                 }
                 // 手柄拖拽：抓到光标/选区端点手柄即接管——重定位光标或调整选区端点；未抓到则不消费，让位给
-                // 滚动/点按/长按。本块是最内层 pointerInput，Main 阶段最先处理，故能先于 scrollable 抢占手柄拖拽；
-                // 命中盒经 caretRectLive 取当前帧几何，避开 stale-capture 坑。
+                // 滚动/点按/长按。触屏专用（鼠标块在其下方、更内层，鼠标 down 会被其消费；本块 Main 阶段仍先于
+                // scrollable 抢占触屏手柄拖拽）；命中盒经 caretRectLive 取当前帧几何，避开 stale-capture 坑。
                 .pointerInput(engine) {
                     awaitEachGesture {
                         val down = awaitFirstDown(requireUnconsumed = false)
+                        if (down.type != PointerType.Touch) return@awaitEachGesture // 手柄手势仅触屏；鼠标交给最内层鼠标块
                         val p = down.position
                         val sel = engine.selection
                         fun hit(kind: HandleKind, at: TextPosition): Boolean {
@@ -1120,6 +1143,107 @@ fun CodeEditor(
                         }
                     }
                 }
+                // 鼠标文本交互（最内层：Main 阶段最先处理并消费鼠标 down，使上方触屏块无从触发）。仅 PointerType.Mouse 生效：
+                // 单击落光标、Shift+单击延伸选区、双击选词、三击选行；拖拽越过 touchSlop 即按锚粒度框选（字符/词/行），边缘由
+                // selectionDragPos/Active 驱动的自动滚动 effect 露出屏外内容。鼠标拖拽不滚动（scrollable2D 本就忽略鼠标拖）。触屏
+                // down 在此不消费、直接 return，交回上方触屏块（点按/长按/手柄）——不干扰既有触屏手势。
+                .pointerInput(engine) {
+                    // 点击计数状态：驻留于本 pointerInput 协程、跨手势保留（awaitEachGesture 在同一协程内循环）。
+                    var lastClickTime = 0L
+                    var lastClickPos = Offset.Zero
+                    var clickCount = 0
+                    awaitEachGesture {
+                        val down = awaitFirstDown(requireUnconsumed = false)
+                        if (down.type != PointerType.Mouse) return@awaitEachGesture // 触屏交给上方触屏块
+                        down.consume()
+                        lastInteractionWasMouse = true
+                        focusRequester.requestFocus()
+                        // keyboardModifiers 携带按下时的 Shift 态；未上报时 shift=false，自然退化为普通单击。
+                        val shift = currentEvent.keyboardModifiers.isKeyboardShiftPressed
+                        val downPos = down.position
+                        val clickPos = positionAtLive.value(downPos)
+
+                        // 点击计数：与上次点击「时间差 ≤ 双击超时」且「位移 ≤ touchSlop」则累加，否则归 1；>3 回绕到 1。
+                        val now = down.uptimeMillis
+                        val within = (now - lastClickTime) <= viewConfiguration.doubleTapTimeoutMillis &&
+                            (downPos - lastClickPos).getDistance() <= viewConfiguration.touchSlop
+                        clickCount = if (within) clickCount + 1 else 1
+                        if (clickCount > 3) clickCount = 1
+                        lastClickTime = now
+                        lastClickPos = downPos
+
+                        // 拖拽锚（互斥）：字符锚=单击 / Shift+单击、词锚=双击、行锚=三击。拖拽与边缘自动滚动据此统一延伸。
+                        var charAnchor: TextPosition? = null
+                        var wordAnchor: TextRange? = null
+                        var lineAnchor: Int? = null
+                        when {
+                            // Shift+单击：保持原锚不动、head 延伸到点击处；拖拽以「当前选区固定端」为字符锚续延伸。
+                            shift -> {
+                                val fixed =
+                                    if (engine.caret == engine.selection.end) engine.selection.start else engine.selection.end
+                                engine.setSelection(fixed, clickPos)
+                                charAnchor = fixed
+                            }
+
+                            clickCount >= 3 -> {
+                                val line = clickPos.line
+                                engine.setSelection(TextPosition(line, 0), TextPosition(line, engine.buffer.lineLength(line)))
+                                lineAnchor = line
+                            }
+
+                            clickCount == 2 -> {
+                                val w = engine.wordRangeAt(clickPos)
+                                engine.setSelection(w.start, w.end)
+                                wordAnchor = w
+                            }
+
+                            else -> {
+                                engine.setCursor(clickPos)
+                                charAnchor = clickPos
+                            }
+                        }
+
+                        // 越过 touchSlop 才进入框选；纯单击（不过 slop）到此结束，仅落光标 / 选词 / 选行。
+                        val slop = awaitTouchSlopOrCancellation(down.id) { c, _ -> c.consume() }
+                        if (slop != null) {
+                            val cAnchor = charAnchor // 提到 val，供闭包 smart-cast
+                            val wAnchor = wordAnchor
+                            val lAnchor = lineAnchor
+                            fun extendTo(o: Offset) {
+                                val c = positionAtLive.value(o)
+                                when {
+                                    wAnchor != null -> engine.selectWordRange(wAnchor, c)
+                                    lAnchor != null -> {
+                                        val a = minOf(lAnchor, c.line)
+                                        val b = maxOf(lAnchor, c.line)
+                                        engine.setSelection(TextPosition(a, 0), TextPosition(b, engine.buffer.lineLength(b)))
+                                    }
+
+                                    else -> engine.setSelection(cAnchor ?: c, c)
+                                }
+                            }
+                            // 先把锚交给边缘自动滚动 effect（据此判字符/词/行粒度），再翻起 selectionDragActive 启动它。
+                            selectionAnchor = cAnchor
+                            selectionWordAnchor = wAnchor
+                            selectionLineAnchor = lAnchor
+                            selectionDragPos = slop.position
+                            selectionDragActive = true
+                            extendTo(slop.position)
+                            drag(down.id) { change ->
+                                selectionDragPos = change.position
+                                extendTo(change.position)
+                                change.consume()
+                            }
+                            selectionDragPos = null
+                            selectionDragActive = false
+                            selectionAnchor = null
+                            selectionWordAnchor = null
+                            selectionLineAnchor = null
+                        }
+                    }
+                }
+                // I 形文本光标：桌面 / 带鼠标的 Android 悬停在文本区时显示；触屏无悬停、无副作用。
+                .pointerHoverIcon(PointerIcon.Text)
         ) {
             EditorCanvas(
                 engine = engine,
@@ -1140,7 +1264,8 @@ fun CodeEditor(
                 firstVisibleLine = { extraTopPx -> (lineAtPx(scrollY.coerceIn(0f, maxScrollY) + extraTopPx) - 3).coerceAtLeast(0) },
                 lineTopPx = ::lineTopPx,
                 refBaselinePx = refBaselinePx,
-                caretHandleVisible = { caretHandleVisible && !readOnly },
+                caretHandleVisible = { caretHandleVisible && !readOnly && !lastInteractionWasMouse },
+                selectionHandlesVisible = { !lastInteractionWasMouse },
                 handleRadiusPx = handleRadiusPx,
                 layoutFor = ::layoutFor,
                 charW = charWpx,

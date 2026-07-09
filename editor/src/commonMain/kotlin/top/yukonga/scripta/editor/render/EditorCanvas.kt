@@ -114,6 +114,7 @@ fun EditorCanvas(
     lineTopPx: (Int) -> Float,
     refBaselinePx: Float,
     caretHandleVisible: () -> Boolean,
+    selectionHandlesVisible: () -> Boolean = { true },
     handleRadiusPx: Float,
     layoutFor: (Int) -> TextLayoutResult?,
     charW: Float,
@@ -305,7 +306,8 @@ fun EditorCanvas(
 
             // 光标不在此画：拆到独立的 [CursorOverlay] 图层，闪烁只切该层 alpha、不重放整块正文画布（见 P10）。
 
-            // 拖动手柄（泪滴）：尖端贴光标底、body 圆朝外下方悬挂作抓取区。选区两端常驻，光标手柄按 caretHandleVisible 控制。
+            // 拖动手柄（泪滴）：尖端贴光标底、body 圆朝外下方悬挂作抓取区。选区两端按 selectionHandlesVisible 控制、
+            // 光标手柄按 caretHandleVisible 控制（鼠标交互时二者均隐藏——桌面/鼠标不需要触摸取词手柄）。
             // 网格行用等宽算术定光标矩形，其余走该行 layout。缩放预览期（s != 1f）隐藏——避免手柄随内容缩放显得突兀，
             // 松手提交后按新布局重新出现，位置正确。命中盒仍由 EditorGeometry.handleGeometry（上层命中侧）给出、覆盖此泪滴。
             fun drawHandle(kind: HandleKind, pos: TextPosition) {
@@ -333,8 +335,10 @@ fun EditorCanvas(
             }
             if (s == 1f) {
                 if (!sel.isEmpty) {
-                    drawHandle(HandleKind.SelectionStart, sel.start)
-                    drawHandle(HandleKind.SelectionEnd, sel.end)
+                    if (selectionHandlesVisible()) {
+                        drawHandle(HandleKind.SelectionStart, sel.start)
+                        drawHandle(HandleKind.SelectionEnd, sel.end)
+                    }
                 } else if (caretHandleVisible()) {
                     drawHandle(HandleKind.Caret, sel.start)
                 }
