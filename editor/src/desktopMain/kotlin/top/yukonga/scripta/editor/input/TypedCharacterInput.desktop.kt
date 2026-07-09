@@ -17,7 +17,9 @@ actual fun insertTypedCharacter(engine: EditorEngine, event: KeyEvent, readOnly:
     if (engine.composing != null) return false
     if (event.isCtrlPressed || event.isMetaPressed || event.isAltPressed) return false
     val cp = event.utf16CodePoint
-    if (cp < 0x20 || cp == 0x7F) return false
+    // 排除无字符按键：修饰键(Shift 等) / 功能键 / IME 中英切换键 —— AWT 对它们报 CHAR_UNDEFINED(0xFFFF)。
+    // 控制字符与未分配码点同样不插。否则按 Shift 切换中英、按功能键都会各插一个 U+FFFF（显示为 ？）。
+    if (cp == 0xFFFF || Character.isISOControl(cp) || !Character.isDefined(cp)) return false
     engine.insert(String(Character.toChars(cp)))
     return true
 }
