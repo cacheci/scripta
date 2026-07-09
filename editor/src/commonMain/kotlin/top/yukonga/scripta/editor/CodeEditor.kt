@@ -914,6 +914,8 @@ fun CodeEditor(
                         }
                     } else {
                         val shift = ev.isShiftPressed
+                        // composing（预编辑）进行中，方向/回车/退格等键由输入法消费、不回落到此处，故这些处理器
+                        // 无需按 composing 设闸；可打印字符路径（insertTypedCharacter）则显式设了 composing 闸。
                         when (ev.key) {
                             Key.DirectionLeft -> {
                                 engine.moveCaretHorizontally(-1, shift); true

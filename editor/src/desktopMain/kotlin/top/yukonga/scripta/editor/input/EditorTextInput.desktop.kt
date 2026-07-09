@@ -120,10 +120,14 @@ private class ScriptaImeRequest(
     override val state: TextEditorState = object : TextEditorState {
         override val length: Int get() = engine.buffer.totalLength()
 
-        override fun get(index: Int): Char =
-            engine.buffer.textInRange(
+        override fun get(index: Int): Char {
+            // CharSequence 契约：合法下标 0..length-1。Compose 的 IME 查询遵守边界，此守卫仅防御越界消费者——
+            // 否则 index==length 时两个 positionAt 都夹到末尾、textInRange 返回空串、[0] 抛不直观的异常。
+            if (index < 0 || index >= length) throw IndexOutOfBoundsException("index=$index, length=$length")
+            return engine.buffer.textInRange(
                 EditorTextRange(engine.buffer.positionAt(index), engine.buffer.positionAt(index + 1))
             )[0]
+        }
 
         override fun subSequence(startIndex: Int, endIndex: Int): CharSequence =
             engine.buffer.textInRange(
