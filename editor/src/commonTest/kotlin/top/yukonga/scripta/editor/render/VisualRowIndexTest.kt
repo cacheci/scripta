@@ -38,15 +38,6 @@ class VisualRowIndexTest {
     }
 
     @Test
-    fun resetReinitializesToOneRow() {
-        val idx = VisualRowIndex(3)
-        idx.setRows(0, 5)
-        idx.reset(4)
-        assertEquals(4, idx.totalRows())
-        assertEquals(2, idx.rowsBefore(2))
-    }
-
-    @Test
     fun singleLine() {
         val idx = VisualRowIndex(1)
         assertEquals(1, idx.totalRows())

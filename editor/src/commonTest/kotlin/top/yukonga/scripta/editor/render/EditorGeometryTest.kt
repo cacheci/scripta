@@ -16,14 +16,6 @@ class EditorGeometryTest {
     }
 
     @Test
-    fun lineAtYMapsAndClamps() {
-        assertEquals(0, EditorGeometry.lineAtY(5f, 0f, 20f, 100))
-        assertEquals(1, EditorGeometry.lineAtY(25f, 0f, 20f, 100))
-        assertEquals(3, EditorGeometry.lineAtY(25f, 40f, 20f, 100)) // y+scroll = 65 -> line 3
-        assertEquals(4, EditorGeometry.lineAtY(9999f, 0f, 20f, 5))  // clamp
-    }
-
-    @Test
     fun caretHandleSitsBelowCaretCentered() {
         // 光标屏幕矩形：x=100, top=0, bottom=20；radius=8, slop=6
         val g = EditorGeometry.handleGeometry(HandleKind.Caret, 100f, 0f, 20f, 8f, 6f)

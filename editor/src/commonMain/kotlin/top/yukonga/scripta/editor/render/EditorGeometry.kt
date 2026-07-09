@@ -35,11 +35,6 @@ object EditorGeometry {
         return maxOf(2, digits)
     }
 
-    fun lineAtY(y: Float, scrollY: Float, lineHeight: Float, lineCount: Int): Int {
-        if (lineHeight <= 0f || lineCount <= 0) return 0
-        return ((y + scrollY) / lineHeight).toInt().coerceIn(0, lineCount - 1)
-    }
-
     // --- 超长「网格行」的等宽算术（M2：不换行下只切可见列窗口，避免 shaping 整行）---
 
     /**

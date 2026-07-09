@@ -17,13 +17,6 @@ class VisualRowIndex(lineCount: Int) {
         buildTree()
     }
 
-    /** 行数变化 / 宽度变化 / 切换换行时重建（全部回到 1 行估算）。 */
-    fun reset(lineCount: Int) {
-        n = lineCount
-        rowsArr = IntArray(n) { 1 }
-        buildTree()
-    }
-
     val lineCount: Int get() = n
 
     fun rows(line: Int): Int = rowsArr[line]

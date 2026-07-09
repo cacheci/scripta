@@ -3,7 +3,7 @@ package top.yukonga.scripta.editor
 import androidx.compose.runtime.Immutable
 import androidx.compose.ui.graphics.Color
 
-/** The languages the editor knows how to highlight. v1 targets YAML; PlainText is the no-highlight fallback. */
+/** The language the editor is configured for. Syntax highlighting is not built yet, so this is currently inert — PlainText and Yaml render identically. */
 enum class EditorLanguage {
     PlainText,
     Yaml,
