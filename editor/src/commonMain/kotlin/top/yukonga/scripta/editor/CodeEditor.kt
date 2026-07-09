@@ -57,6 +57,7 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.PointerType
+import androidx.compose.ui.input.pointer.isSecondaryPressed
 import androidx.compose.ui.input.pointer.isShiftPressed as isKeyboardShiftPressed
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.input.pointer.pointerInput
@@ -77,13 +78,14 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
-import kotlinx.coroutines.launch
 import top.yukonga.scripta.editor.input.EditorKeyCommand
 import top.yukonga.scripta.editor.input.editorTextInput
 import top.yukonga.scripta.editor.input.insertTypedCharacter
-import top.yukonga.scripta.editor.input.plainText
-import top.yukonga.scripta.editor.input.plainTextClipEntry
 import top.yukonga.scripta.editor.input.resolveEditorKeyCommand
+import top.yukonga.scripta.editor.menu.EditorClipboardActions
+import top.yukonga.scripta.editor.menu.EditorContextAction
+import top.yukonga.scripta.editor.menu.EditorContextMenu
+import top.yukonga.scripta.editor.menu.SelectionActionToolbar
 import top.yukonga.scripta.editor.render.CursorOverlay
 import top.yukonga.scripta.editor.render.EditorCanvas
 import top.yukonga.scripta.editor.render.EditorGeometry
@@ -492,6 +494,14 @@ fun CodeEditor(
     // （桌面/鼠标场景不需要触摸取词手柄；放大镜本就只在触屏手柄拖拽的 handleDragActive 下出现，故不受影响）。
     var lastInteractionWasMouse by remember { mutableStateOf(false) }
 
+    // 触屏文本操作悬浮条（选区上方浮条 / 点光标粘贴气泡）的「已触发」闩：点按落光标 / 选词 / 拖拽结算后置真，
+    // 新一次触屏按下 / 编辑 / 切到鼠标 / 选中某项后置假。是否真正显示还要过 SelectionActionToolbar 的 show 门
+    // （再排除拖手柄 / 框选 / 鼠标态）。
+    var showTouchMenu by remember { mutableStateOf(false) }
+    // 桌面右键上下文菜单：显示开关 + 锚点（编辑器局部像素，取右键按下点）。
+    var showContextMenu by remember { mutableStateOf(false) }
+    var contextMenuAnchor by remember { mutableStateOf<Offset?>(null) }
+
     var blink by remember { mutableStateOf(true) }
     // 选区变化即重置闪烁相位（光标一移立即可见）。用 snapshotFlow 在快照观察者里读 selection，而非把它当组合期
     // effect key——否则拖选每次移动都会整体重组本可组合（含预测量循环）。collectLatest 在新选区到达时取消上一
@@ -522,8 +532,21 @@ fun CodeEditor(
         }
     }
     LaunchedEffect(engine.buffer.version) {
-        // 任何编辑都收起光标手柄；首帧亦触发，但此时本就不可见、无副作用。
+        // 任何编辑都收起光标手柄与操作菜单；首帧亦触发，但此时本就不可见、无副作用。
         caretHandleVisible = false
+        showTouchMenu = false
+        showContextMenu = false
+    }
+
+    // 触屏悬浮条在「拖手柄 / 长按框选」结算后复现：观察 (handleDragActive || selectionDragActive) 的真→假沿，
+    // 拖拽一结束就重新亮出工具条（拖拽期由 SelectionActionToolbar 的 show 门隐藏）。仅触屏、且确有过一次拖拽才触发
+    // （wasActive 初值假 → 挂载首帧的假值不误亮）。
+    LaunchedEffect(Unit) {
+        var wasActive = false
+        snapshotFlow { handleDragActive || selectionDragActive }.collectLatest { active ->
+            if (wasActive && !active && !lastInteractionWasMouse) showTouchMenu = true
+            wasActive = active
+        }
     }
 
     // 光标/端点在其行内的内容 x（网格行等宽算术、其余走该行 layout）；无 layout 返回 null。keep-in-view 与两个边缘自动滚动
@@ -609,6 +632,12 @@ fun CodeEditor(
 
     // 只读态提升为「当前帧」值，供固定 key 的手势闭包读取，避免 readOnly 切换后闭包按旧值捕获。
     val readOnlyLive = rememberUpdatedState(readOnly)
+
+    // 剪切/复制/粘贴/全选统一执行器：硬键盘 onKeyEvent、触屏悬浮条、桌面右键菜单三条路共用（readOnly 读活值，
+    // 避免被固定 key 的手势闭包按旧值捕获）。
+    val clipboardActions = remember(engine, clipboard, clipboardScope) {
+        EditorClipboardActions(engine, clipboard, clipboardScope) { readOnlyLive.value }
+    }
 
     // 光标/端点在屏幕上的矩形 [left, top, bottom]，供手柄命中测试。读活的 scroll/layout；用 rememberUpdatedState
     // 让固定 key 的手势闭包取到当前帧几何（与 positionAtLive 同理）。与画布 drawHandle 的坐标算法一致。
@@ -818,6 +847,10 @@ fun CodeEditor(
                             val step = liveLineHeightPx.value * 3f
                             scrollY = (scrollY + dy * step).coerceIn(0f, liveMaxScrollY.value)
                             scrollX = (scrollX + dx * step).coerceIn(0f, liveMaxScrollX.value)
+                            // 滚轮/触控板滚动无触屏/鼠标 down，不会经点按块清菜单——在此显式收起，避免气泡黏在窗口边、
+                            // 且让悬浮条 show 门转假、不再订阅滚动（混合触屏+指点设备场景）。
+                            showTouchMenu = false
+                            showContextMenu = false
                             event.changes.forEach { it.consume() }
                         }
                     }
@@ -933,20 +966,11 @@ fun CodeEditor(
                     // 平台各异的剪贴板 / 导航快捷键先经 resolveEditorKeyCommand 归一（mac=Cmd/Opt，其余=Ctrl）。
                     resolveEditorKeyCommand(ev)?.let { cmd ->
                         when (cmd) {
-                            // 全选/复制只读下也可用；剪切/粘贴改文档，只读消费但不执行。
-                            EditorKeyCommand.SelectAll -> engine.selectAll()
-                            EditorKeyCommand.Copy -> engine.selectedText()?.let { txt ->
-                                clipboardScope.launch { clipboard.setClipEntry(plainTextClipEntry(txt)) }
-                            }
-
-                            EditorKeyCommand.Cut -> if (!readOnly) engine.selectedText()?.let { txt ->
-                                clipboardScope.launch { clipboard.setClipEntry(plainTextClipEntry(txt)) }
-                                engine.replaceSelection("")
-                            }
-
-                            EditorKeyCommand.Paste -> if (!readOnly) clipboardScope.launch {
-                                clipboard.getClipEntry()?.plainText()?.let { engine.insert(it) }
-                            }
+                            // 剪贴/全选统一走执行器（只读门在其内：复制/全选可用、剪切/粘贴 no-op）。
+                            EditorKeyCommand.SelectAll -> clipboardActions.perform(EditorContextAction.SelectAll)
+                            EditorKeyCommand.Copy -> clipboardActions.perform(EditorContextAction.Copy)
+                            EditorKeyCommand.Cut -> clipboardActions.perform(EditorContextAction.Cut)
+                            EditorKeyCommand.Paste -> clipboardActions.perform(EditorContextAction.Paste)
 
                             EditorKeyCommand.WordLeft -> engine.moveCaretByWord(-1, shift)
                             EditorKeyCommand.WordRight -> engine.moveCaretByWord(1, shift)
@@ -1009,26 +1033,43 @@ fun CodeEditor(
                         val down = awaitFirstDown(requireUnconsumed = false)
                         if (down.type == PointerType.Mouse) return@awaitEachGesture // 仅鼠标让给最内层鼠标块；触控笔/未知指针走此触屏路径（勿漏掉 stylus）
                         lastInteractionWasMouse = false
+                        showTouchMenu = false // 新一次触屏按下先隐藏菜单；本次手势结算（落光标/选词）后再亮
+                        showContextMenu = false
                         // 等抬手，但包一层长按超时：若超时前未抬手，说明这次已升级为长按（由下方 block 选词），
                         // 本 block 直接让位、不落光标——否则纯长按选词后「不拖动直接抬手」会把刚选好的词塌成光标
                         // （长按 block 不移动时不消费任何 change，waitForUpOrCancellation 拿到未消费的 up 会误触发）。
                         val up = withTimeoutOrNull(viewConfiguration.longPressTimeoutMillis) {
                             waitForUpOrCancellation()
                         } ?: return@awaitEachGesture
-                        engine.setCursor(positionAtLive.value(up.position))
+                        val tapPos = positionAtLive.value(up.position)
+                        // 移动端惯例：一点定位、再点同处才唤菜单。仅「点在已有光标处」（空选区且位置不变）才亮粘贴气泡；
+                        // 首次点按或点到别处只落/移光标、不弹菜单。双击选词与长按选区仍立即出工具条（见下方 / drag-settle）。
+                        val onExistingCaret = engine.selection.isEmpty && engine.caret == tapPos
+                        engine.setCursor(tapPos)
                         focusRequester.requestFocus()
                         if (!readOnlyLive.value) {
                             engine.requestShowKeyboard?.invoke()
                             pingCaretHandle() // 落光标后显示泪滴手柄（4s 后自动隐藏）
                         }
+                        showTouchMenu = onExistingCaret
                         val second = withTimeoutOrNull(viewConfiguration.doubleTapTimeoutMillis) {
                             awaitFirstDown(requireUnconsumed = false)
                         }
                         val up2 = if (second != null) waitForUpOrCancellation() else null
                         if (up2 != null) {
-                            val w = engine.wordRangeAt(positionAtLive.value(up2.position))
-                            engine.setSelection(w.start, w.end)
-                            focusRequester.requestFocus()
+                            val pos2 = positionAtLive.value(up2.position)
+                            // 双击选词【有容错】：两击落点在 touchSlop 内即算双击、选词并出选区工具条（与鼠标多击的就近判定同阈值）。
+                            // 而气泡菜单【无容错】：只在精确点回原光标处才出（上面的 onExistingCaret），此处第二击一旦移开就只挪光标、不出菜单。
+                            if ((up2.position - up.position).getDistance() <= viewConfiguration.touchSlop) {
+                                val w = engine.wordRangeAt(pos2)
+                                engine.setSelection(w.start, w.end)
+                                focusRequester.requestFocus()
+                                showTouchMenu = true
+                            } else {
+                                engine.setCursor(pos2)
+                                focusRequester.requestFocus()
+                                showTouchMenu = false
+                            }
                         }
                     }
                 }
@@ -1184,11 +1225,16 @@ fun CodeEditor(
                         if (down.type != PointerType.Mouse) return@awaitEachGesture // 触屏交给上方触屏块
                         down.consume()
                         lastInteractionWasMouse = true
-                        focusRequester.requestFocus()
+                        showTouchMenu = false // 切到鼠标：收起触屏悬浮条（其 show 门也含 !lastInteractionWasMouse，这里同时清闩）
                         // keyboardModifiers 携带按下时的 Shift 态；未上报时 shift=false，自然退化为普通单击。
                         val shift = currentEvent.keyboardModifiers.isKeyboardShiftPressed
                         val downPos = down.position
                         val clickPos = positionAtLive.value(downPos)
+                        // 右键（副键）由下方专用 raw-event 块处理：桌面(skiko)上「只按副键」不置 pointer.pressed，
+                        // awaitFirstDown 根本不触发（故本块在桌面收不到右键）；Android 上会触发，这里也一并让开、不落左键逻辑。
+                        if (currentEvent.buttons.isSecondaryPressed) return@awaitEachGesture
+                        focusRequester.requestFocus()
+                        showContextMenu = false // 左键（或其他）先关右键菜单
 
                         // 点击计数：与上次点击「时间差 ≤ 双击超时」且「位移 ≤ touchSlop」则累加，否则归 1；>3 回绕到 1。
                         val now = down.uptimeMillis
@@ -1266,6 +1312,41 @@ fun CodeEditor(
                             selectionAnchor = null
                             selectionWordAnchor = null
                             selectionLineAnchor = null
+                        }
+                    }
+                }
+                // 右键上下文菜单（跨平台）：桌面(skiko)上「只按副键」不会置 pointer.pressed，awaitFirstDown/detectTap 都收不到，
+                // 故上面基于 awaitFirstDown 的鼠标块在桌面漏掉右键（Android 上副键会置 pressed，故那边正常）。这里改用原始事件、
+                // 按 isSecondaryPressed 的升/降沿识别（两平台统一）：按下沿落光标（选区外）、抬起沿才弹菜单（press 已收尾，
+                // focusable Popup 不会被这次按键的收尾立即关掉）。
+                .pointerInput(engine) {
+                    awaitPointerEventScope {
+                        var wasSecondary = false
+                        var anchor = Offset.Zero
+                        while (true) {
+                            val e = awaitPointerEvent()
+                            val ch = e.changes.firstOrNull()
+                            if (ch == null || ch.type != PointerType.Mouse) {
+                                wasSecondary = false
+                                continue
+                            }
+                            val isSecondary = e.buttons.isSecondaryPressed
+                            if (isSecondary && !wasSecondary) {
+                                // 副键按下沿：落光标（点在选区外）+ 记锚，消费本次事件。
+                                e.changes.forEach { it.consume() }
+                                lastInteractionWasMouse = true
+                                showTouchMenu = false
+                                anchor = ch.position
+                                val p = positionAtLive.value(ch.position)
+                                val sel = engine.selection
+                                if (sel.isEmpty || p < sel.start || p > sel.end) engine.setCursor(p)
+                            } else if (!isSecondary && wasSecondary) {
+                                // 副键抬起沿：此刻弹菜单。
+                                e.changes.forEach { it.consume() }
+                                contextMenuAnchor = anchor
+                                showContextMenu = true
+                            }
+                            wasSecondary = isSecondary
                         }
                     }
                 }
@@ -1353,6 +1434,26 @@ fun CodeEditor(
                 gridRefCursorBottom = gridRefCursor.bottom,
                 gutterWidthPx = gutterWidthPx,
                 padXPx = padXPx,
+            )
+            // 触屏文本操作悬浮条（选区上方浮条 / 点光标粘贴气泡）。show 门：已触发 && 非鼠标 && 未在拖手柄/框选；
+            // 宿主在本 Box 内，Popup 锚定本 Box → posRect 的编辑器局部坐标即定位基准。
+            SelectionActionToolbar(
+                engine = engine,
+                colors = colors,
+                show = { showTouchMenu && !lastInteractionWasMouse && !handleDragActive && !selectionDragActive },
+                readOnly = readOnly,
+                posRect = { caretRectLive.value(it) },
+                onPerform = { clipboardActions.perform(it); showTouchMenu = false },
+            )
+            // 桌面右键上下文菜单：锚在右键按下点（编辑器局部）。
+            EditorContextMenu(
+                engine = engine,
+                colors = colors,
+                readOnly = readOnly,
+                show = { showContextMenu },
+                anchor = { contextMenuAnchor },
+                onDismiss = { showContextMenu = false },
+                onPerform = { clipboardActions.perform(it); showContextMenu = false },
             )
         }
         // 底部符号快捷条：只读不显示。点键只把 value 交 engine 插到光标处，**不主动聚焦/弹键盘**：
