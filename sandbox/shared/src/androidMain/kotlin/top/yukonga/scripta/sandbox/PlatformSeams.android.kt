@@ -30,6 +30,9 @@ actual fun rememberDocumentOpener(
 ): DocumentOpener {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    // SAF 文档选择器：读一次即用，不需要 takePersistableUriPermission（回调期间的临时授权已够）。
+    // MIME 传 */*——.yaml/.log/.kt 等常被系统报成非 text/* 类型，用 text/* 过滤反而会把想打开的
+    // 文件挡在选择器外；这里一律按 UTF-8 解码，放开筛选让所有文件可见。
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri ?: return@rememberLauncherForActivityResult
         readDocument(scope, context, uri, onOpened, onError)
@@ -51,6 +54,8 @@ private fun readDocument(
             if (size > MAX_OPEN_BYTES) {
                 throw IOException("文件过大（${size / 1024 / 1024}MB），上限 ${MAX_OPEN_BYTES / 1024 / 1024}MB")
             }
+            // readBytes().decodeToString() 峰值 ≈ byte[] + String（~2N）；优于 readText 的
+            // StringWriter/StringBuffer 反复 copyOf 扩容（~3N，正是打开大文件 OOM 的那一下）。
             val body = context.contentResolver.openInputStream(uri)
                 ?.use { it.readBytes().decodeToString() }
                 ?: throw IOException("无法读取文件")
@@ -69,6 +74,7 @@ private fun queryDisplayName(context: Context, uri: Uri): String? =
         if (c.moveToFirst()) c.getString(0) else null
     }
 
+/** 查询 SAF 文档字节大小，用于打开前的上限校验；查不到返回 -1（此时跳过校验、照常打开）。 */
 private fun queryFileSize(context: Context, uri: Uri): Long =
     context.contentResolver.query(uri, arrayOf(OpenableColumns.SIZE), null, null, null)?.use { c ->
         if (c.moveToFirst() && !c.isNull(0)) c.getLong(0) else -1L

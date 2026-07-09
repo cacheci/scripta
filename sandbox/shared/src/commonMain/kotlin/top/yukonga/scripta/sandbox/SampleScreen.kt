@@ -98,6 +98,7 @@ fun SampleScreen(modifier: Modifier = Modifier) {
                     text = SAMPLE_YAML
                     language = EditorLanguage.Yaml
                     openedName = null
+                    errorMessage = null
                 },
             )
             BasicText(
