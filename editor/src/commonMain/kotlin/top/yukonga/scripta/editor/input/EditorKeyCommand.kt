@@ -2,12 +2,10 @@ package top.yukonga.scripta.editor.input
 
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEvent
-import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.isAltPressed
 import androidx.compose.ui.input.key.isCtrlPressed
 import androidx.compose.ui.input.key.isMetaPressed
 import androidx.compose.ui.input.key.key
-import androidx.compose.ui.input.key.type
 
 /** 语义编辑命令：把平台各异的按键组合归一，供 onKeyEvent 派发（Shift 由调用方另读，决定是否扩选）。 */
 enum class EditorKeyCommand {
