@@ -2,11 +2,10 @@ package top.yukonga.scripta.sandbox
 
 import top.yukonga.scripta.editor.EditorLanguage
 
-/** 打开外部文件的字节上限：整篇仍需入内存，超堆容量必 OOM，超此值直接拒绝并提示。piece-table 后
- *  常驻降到 ~1×（original 只读一份、无行链表/索引），故较行链表时代翻倍。 */
+/** 打开外部文件的字节上限：整篇仍需入内存，超堆容量必 OOM，超此值直接拒绝并提示。 */
 internal const val MAX_OPEN_BYTES = 64L * 1024 * 1024
 
-/** 按扩展名判定语言：.yaml/.yml 走 YAML 高亮，其余按纯文本（避免把 .json/.kt 误高亮成 YAML）。 */
+/** 按扩展名判定语言：.yaml/.yml 走 YAML，其余按纯文本。 */
 internal fun languageForName(name: String?): EditorLanguage {
     val ext = name?.substringAfterLast('.', "")?.lowercase()
     return if (ext == "yaml" || ext == "yml") EditorLanguage.Yaml else EditorLanguage.PlainText
