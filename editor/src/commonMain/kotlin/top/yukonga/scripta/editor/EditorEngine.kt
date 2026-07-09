@@ -267,6 +267,67 @@ class EditorEngine(initialText: String = "") {
         desiredColumn = goal // setCursor/extendSelectionTo 已清空，这里恢复目标列供连续上下移动
     }
 
+    fun moveCaretToLineStart(extend: Boolean) {
+        val to = TextPosition(head.line, 0)
+        if (extend) extendSelectionTo(to) else setCursor(to)
+    }
+
+    fun moveCaretToLineEnd(extend: Boolean) {
+        val to = TextPosition(head.line, buffer.lineLength(head.line))
+        if (extend) extendSelectionTo(to) else setCursor(to)
+    }
+
+    fun moveCaretToDocStart(extend: Boolean) {
+        val to = TextPosition(0, 0)
+        if (extend) extendSelectionTo(to) else setCursor(to)
+    }
+
+    fun moveCaretToDocEnd(extend: Boolean) {
+        val to = buffer.endPosition()
+        if (extend) extendSelectionTo(to) else setCursor(to)
+    }
+
+    /** 按词移动：从 head 越过一段「同类字符」到其边界（词 / 空白 / 标点各成段，见 [charClass]）；
+     *  在行首 / 行末与逐字导航一样跨行。横向移动 → 清目标列（extendSelectionTo/setCursor 已清）。 */
+    fun moveCaretByWord(dir: Int, extend: Boolean) {
+        val to = wordBoundaryFrom(head, dir)
+        if (extend) extendSelectionTo(to) else setCursor(to)
+    }
+
+    /** 翻页：按 [dir]*[lines] 行纵向移动，保留 goal column（与 [moveCaretVertically] 同法）。 */
+    fun movePage(dir: Int, lines: Int, extend: Boolean) {
+        val from = head
+        val goal = desiredColumn ?: from.column
+        val targetLine = (from.line + dir * lines).coerceIn(0, buffer.lineCount - 1)
+        val targetCol = goal.coerceAtMost(buffer.lineLength(targetLine))
+        val to = TextPosition(targetLine, targetCol)
+        if (extend) extendSelectionTo(to) else setCursor(to)
+        desiredColumn = goal // setCursor/extendSelectionTo 已清空，这里恢复目标列供连续翻页
+    }
+
+    private fun wordBoundaryFrom(pos: TextPosition, dir: Int): TextPosition {
+        val line = buffer.lineText(pos.line)
+        return if (dir > 0) {
+            if (pos.column >= line.length) {
+                if (pos.line < buffer.lineCount - 1) TextPosition(pos.line + 1, 0) else pos
+            } else {
+                val cls = charClass(line[pos.column])
+                var c = pos.column
+                while (c < line.length && charClass(line[c]) == cls) c++
+                TextPosition(pos.line, c)
+            }
+        } else {
+            if (pos.column <= 0) {
+                if (pos.line > 0) TextPosition(pos.line - 1, buffer.lineLength(pos.line - 1)) else pos
+            } else {
+                val cls = charClass(line[pos.column - 1])
+                var c = pos.column
+                while (c > 0 && charClass(line[c - 1]) == cls) c--
+                TextPosition(pos.line, c)
+            }
+        }
+    }
+
     // --- 选择文本 / IME getter ---------------------------------------------------------------
 
     fun selectedText(): String? = if (selection.isEmpty) null else buffer.textInRange(selection)

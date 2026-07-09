@@ -428,4 +428,97 @@ class EditorEngineTest {
         assertEquals(TextPosition(0, 1), e.selStart)
         assertEquals(TextPosition(0, 2), e.selEnd)
     }
+
+    // --- Plan 2: line / doc / word / page navigation ---
+
+    @Test
+    fun lineStartAndEnd() {
+        val e = EditorEngine("  hello world")
+        e.setCursor(TextPosition(0, 6))
+        e.moveCaretToLineStart(extend = false)
+        assertEquals(TextPosition(0, 0), e.selStart)
+        e.moveCaretToLineEnd(extend = false)
+        assertEquals(TextPosition(0, 13), e.selStart) // 行长 13
+    }
+
+    @Test
+    fun lineStartExtendsSelection() {
+        val e = EditorEngine("hello")
+        e.setCursor(TextPosition(0, 4))
+        e.moveCaretToLineStart(extend = true)
+        assertEquals(TextPosition(0, 0), e.selStart)
+        assertEquals(TextPosition(0, 4), e.selEnd)
+    }
+
+    @Test
+    fun docStartAndEnd() {
+        val e = EditorEngine("a\nbb\nccc")
+        e.setCursor(TextPosition(1, 1))
+        e.moveCaretToDocEnd(extend = false)
+        assertEquals(TextPosition(2, 3), e.selStart)
+        e.moveCaretToDocStart(extend = false)
+        assertEquals(TextPosition(0, 0), e.selStart)
+    }
+
+    @Test
+    fun wordRightStopsAtClassBoundaries() {
+        val e = EditorEngine("foo bar")
+        e.setCursor(TextPosition(0, 0))
+        e.moveCaretByWord(1, extend = false) // 越过 "foo" -> 空格前
+        assertEquals(TextPosition(0, 3), e.selStart)
+        e.moveCaretByWord(1, extend = false) // 越过 " " -> "bar" 前
+        assertEquals(TextPosition(0, 4), e.selStart)
+        e.moveCaretByWord(1, extend = false) // 越过 "bar" -> 行末
+        assertEquals(TextPosition(0, 7), e.selStart)
+    }
+
+    @Test
+    fun wordLeftStopsAtClassBoundaries() {
+        val e = EditorEngine("foo bar")
+        e.setCursor(TextPosition(0, 7))
+        e.moveCaretByWord(-1, extend = false) // 退过 "bar" -> 空格后
+        assertEquals(TextPosition(0, 4), e.selStart)
+        e.moveCaretByWord(-1, extend = false) // 退过 " " -> "foo" 后
+        assertEquals(TextPosition(0, 3), e.selStart)
+    }
+
+    @Test
+    fun wordRightAtLineEndCrossesLine() {
+        val e = EditorEngine("ab\ncd")
+        e.setCursor(TextPosition(0, 2)) // 行末
+        e.moveCaretByWord(1, extend = false)
+        assertEquals(TextPosition(1, 0), e.selStart)
+    }
+
+    @Test
+    fun wordMoveResetsGoalColumn() {
+        val e = EditorEngine("abcdefgh\nxy\nabcdefgh")
+        e.setCursor(TextPosition(0, 6))
+        e.moveCaretVertically(1, extend = false)   // (1,2) 夹短行，goal=6
+        e.moveCaretByWord(-1, extend = false)      // 横向 -> 重置 goal
+        e.moveCaretVertically(1, extend = false)   // 以当前列下移，而非旧 goal 6
+        assertEquals(2, e.selEnd.line)             // 仍在有效范围
+        assertEquals(TextPosition(2, 0), e.selEnd) // (1,0) 下移到 (2,0)
+    }
+
+    @Test
+    fun pageMovePreservesGoalColumnAndClamps() {
+        val e = EditorEngine((0..9).joinToString("\n") { "line$it" }) // 10 行，每行 "lineN" 长 5
+        e.setCursor(TextPosition(0, 4))
+        e.movePage(1, 3, extend = false)           // 下移 3 行
+        assertEquals(TextPosition(3, 4), e.selStart)
+        e.movePage(1, 100, extend = false)         // 越界 -> 夹到末行
+        assertEquals(9, e.selStart.line)
+        e.movePage(-1, 100, extend = false)        // 越界 -> 夹到首行，goal 列 4 保留
+        assertEquals(TextPosition(0, 4), e.selStart)
+    }
+
+    @Test
+    fun pageMoveExtends() {
+        val e = EditorEngine((0..9).joinToString("\n") { "line$it" })
+        e.setCursor(TextPosition(0, 2))
+        e.movePage(1, 3, extend = true)
+        assertEquals(TextPosition(0, 2), e.selStart)
+        assertEquals(TextPosition(3, 2), e.selEnd)
+    }
 }
