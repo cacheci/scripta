@@ -43,6 +43,8 @@ data class EditorColors(
     /** 查找命中的底色 / 当前命中的强调底色（画在选区之下）。带默认值，不破坏既有构造。 */
     val findMatch: Color = Color(0x4DFFC107),
     val findMatchActive: Color = Color(0x80FF6F00),
+    /** 无选区时当前行的整行底色。带默认值（与深色 gutter 同值，沿用旧视觉），不破坏既有构造。 */
+    val currentLine: Color = Color(0xFF252526),
     /** 语法高亮配色（token 类型 → 颜色，逐槽位可自定义）。带默认值，不破坏既有构造。 */
     val syntax: SyntaxColors = SyntaxColors.Dark,
 ) {
@@ -56,6 +58,7 @@ data class EditorColors(
             cursor = Color(0xFFAEAFAD),
             selection = Color(0x553A6DA0),
             handle = Color(0xFF277AF7),
+            currentLine = Color(0xFF252526),
         )
 
         /** Light counterpart to [Default]; same field set, tuned for a white background. */
@@ -70,6 +73,7 @@ data class EditorColors(
             symbolBarBackground = Color(0xFFECECEC),
             symbolBarForeground = Color(0xFF3C3C3C),
             symbolBarPressed = Color(0x14000000),
+            currentLine = Color(0xFFF3F3F3),
             syntax = SyntaxColors.Light,
         )
     }

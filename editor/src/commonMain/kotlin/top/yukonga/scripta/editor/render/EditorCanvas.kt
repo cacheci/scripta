@@ -201,7 +201,7 @@ fun EditorCanvas(
                         val lineLen = engine.buffer.lineLength(line)
                         val textTop = top + (refBaselinePx - gridRefBaseline)
                         if (sel.isEmpty && sel.start.line == line) {
-                            drawRect(colors.gutterBackground, topLeft = Offset(hlLeft, top), size = Size(hlWidth, h))
+                            drawRect(colors.currentLine, topLeft = Offset(hlLeft, top), size = Size(hlWidth, h))
                         }
                         // 查找命中底色（选区之下）：网格行走等宽算术。当前命中用强调色。
                         val findSpans = findSpansForLine(line)
@@ -272,7 +272,7 @@ fun EditorCanvas(
                     // 当前行淡色高亮（无选择时）：铺满整行宽（含 gutter 区）。固定模式下左段会被文末 gutter 条盖住、
                     // 视觉不变；跟随模式下 gutter 条随内容滚走，整行仍均匀高亮、左侧不留缺口。
                     if (sel.isEmpty && sel.start.line == line) {
-                        drawRect(colors.gutterBackground, topLeft = Offset(hlLeft, top), size = Size(hlWidth, h))
+                        drawRect(colors.currentLine, topLeft = Offset(hlLeft, top), size = Size(hlWidth, h))
                     }
                     // 查找命中底色（选区之下）：range path 与选区同式、锚固定行栅格 top。当前命中用强调色。
                     val findSpans = findSpansForLine(line)
