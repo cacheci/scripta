@@ -9,7 +9,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
@@ -76,7 +75,10 @@ internal fun FindReplaceBar(
                     onValueChange = { session.query = it },
                     placeholder = "查找",
                     colors = colors,
+                    // 弹性宽度：固定尺寸的计数/开关/按钮先占位，输入框吸收剩余宽度——窄屏（或大字体缩放）
+                    // 下被压缩的是输入框，行尾的 ✕ 等控件在任何屏宽都可见。
                     modifier = Modifier
+                        .weight(1f)
                         .focusRequester(queryFocus)
                         .onPreviewKeyEvent { ev ->
                             if (ev.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
@@ -97,7 +99,7 @@ internal fun FindReplaceBar(
                 BasicText(
                     text = counterText(session),
                     style = TextStyle(color = colors.symbolBarForeground.copy(alpha = 0.75f), fontSize = 12.sp),
-                    modifier = Modifier.widthIn(min = 44.dp),
+                    maxLines = 1,
                 )
                 ToggleChip("Aa", session.caseSensitive, colors) { session.caseSensitive = it }
                 ToggleChip("词", session.wholeWord, colors) { session.wholeWord = it }
@@ -113,7 +115,8 @@ internal fun FindReplaceBar(
                         onValueChange = { session.replacement = it },
                         placeholder = "替换为",
                         colors = colors,
-                        modifier = Modifier.onPreviewKeyEvent { ev ->
+                        // 与查询框同理：弹性宽度，替换按钮恒可见。
+                        modifier = Modifier.weight(1f).onPreviewKeyEvent { ev ->
                             if (ev.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
                             when (ev.key) {
                                 Key.Enter, Key.NumPadEnter -> {
@@ -159,10 +162,11 @@ private fun FindField(
 ) {
     Box(
         modifier
+            // 宽度交给调用方（Row 内 weight 弹性分配），只兜一个可点/可读的下限。
+            .widthIn(min = 72.dp)
             .clip(RoundedCornerShape(4.dp))
             .background(colors.background.copy(alpha = 0.6f))
-            .padding(horizontal = 8.dp, vertical = 6.dp)
-            .width(168.dp),
+            .padding(horizontal = 8.dp, vertical = 6.dp),
         contentAlignment = Alignment.CenterStart,
     ) {
         if (value.isEmpty()) {
