@@ -193,21 +193,34 @@ class YamlHighlighter : SyntaxHighlighter {
                 if (e > i) classifyAndAdd(i, e)
                 i = end
             } else {
+                // token 到 , ] } 或「键冒号」为止。冒号仅在后随空格 / 流分隔 / 行尾时才是键值分隔
+                // ——无引号 URL（https://…）或带端口地址（host:9090）里的冒号属于标量本身，不切断。
                 var j = i
-                while (j < text.length && text[j] !in FLOW_DELIMS) j++
+                while (j < text.length) {
+                    val ch = text[j]
+                    if (ch == ',' || ch == ']' || ch == '}') break
+                    if (ch == ':' && isFlowKeyColon(j)) break
+                    j++
+                }
                 var e = j
                 while (e > i && text[e - 1] == ' ') e--
                 if (e > i) {
-                    var k = j
-                    while (k < text.length && text[k] == ' ') k++
-                    if (k < text.length && text[k] == ':') {
-                        spans.add(HighlightSpan(i, e, TokenType.Key))
+                    if (j < text.length && text[j] == ':') {
+                        // 停在键冒号上：本 token 是流内键；`<<` 合并键与块上下文同色。
+                        val kind = if (text.substring(i, e) == "<<") TokenType.Keyword else TokenType.Key
+                        spans.add(HighlightSpan(i, e, kind))
                     } else {
                         classifyAndAdd(i, e)
                     }
                 }
                 i = j
             }
+        }
+
+        /** [pos] 处的冒号是否为流内「键值分隔」：后随空格 / 流分隔符 / 行尾（YAML 流语法的键冒号形态）。 */
+        private fun isFlowKeyColon(pos: Int): Boolean {
+            val n = pos + 1
+            return n >= text.length || text[n] == ' ' || text[n] == ',' || text[n] == ']' || text[n] == '}'
         }
 
         private fun classifyAndAdd(s: Int, e: Int) {
@@ -273,7 +286,6 @@ class YamlHighlighter : SyntaxHighlighter {
         private fun done() = LineHighlight(spans, exit)
 
         companion object {
-            private const val FLOW_DELIMS = ",]}:"
             private val BOOLS = setOf("true", "false", "yes", "no", "on", "off")
             private val NUMBER = Regex("^[-+]?(0x[0-9a-fA-F]+|0o[0-7]+|(\\d+(\\.\\d*)?|\\.\\d+)([eE][-+]?\\d+)?)$")
             private val DATE = Regex("^\\d{4}-\\d{2}-\\d{2}([Tt ].*)?$")

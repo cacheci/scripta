@@ -226,6 +226,44 @@ class YamlHighlighterTest {
         assertEquals(TokenType.Key, out.spans[0].type)
     }
 
+    // --- 流式集合里的「非键冒号」（无引号 URL / 带端口地址） ---------------------------------
+
+    @Test
+    fun flowUnquotedUrlIsOneScalar() {
+        // flow 键冒号须后随空格/分隔/行尾；URL 里的 :// 不满足 → 整个 URL 是一个标量，https 不是键。
+        val text = "a: {icon: https://x.com/y.png}"
+        assertEquals(TokenType.Key, typeAt(text, 4))       // icon
+        assertEquals(TokenType.String, typeAt(text, 10))   // h
+        assertEquals(TokenType.String, typeAt(text, 15))   // ':' 属于 URL
+        assertEquals(TokenType.String, typeAt(text, 28))   // g（.png 尾）
+        assertEquals(TokenType.Punctuation, typeAt(text, 29)) // }
+    }
+
+    @Test
+    fun flowValueWithPortColonIsOneScalar() {
+        val text = "x: {addr: 127.0.0.1:9090, a: 1}"
+        assertEquals(TokenType.Key, typeAt(text, 4))       // addr
+        assertEquals(TokenType.String, typeAt(text, 10))   // 127...
+        assertEquals(TokenType.String, typeAt(text, 21))   // 9090 与 IP 同段
+        assertEquals(TokenType.Key, typeAt(text, 26))      // a 仍是键
+        assertEquals(TokenType.Number, typeAt(text, 29))   // 1
+    }
+
+    @Test
+    fun flowMergeKeyIsKeyword() {
+        val text = "y: {<<: *pr, url: v}"
+        assertEquals(TokenType.Keyword, typeAt(text, 4))   // <<
+        assertEquals(TokenType.Anchor, typeAt(text, 8))    // *pr
+        assertEquals(TokenType.Key, typeAt(text, 13))      // url
+    }
+
+    @Test
+    fun flowSpacedKeyColonStillKey() {
+        val text = "m: {a : 1}"
+        assertEquals(TokenType.Key, typeAt(text, 4))
+        assertEquals(TokenType.Number, typeAt(text, 8))
+    }
+
     // --- CJK 键值 ----------------------------------------------------------------------------
 
     @Test
@@ -234,5 +272,76 @@ class YamlHighlighterTest {
         val s = spans(text)
         assertEquals(HighlightSpan(0, 2, TokenType.Key), s[0])
         assertEquals(TokenType.String, s.last().type)
+    }
+
+    // --- 真实配置样本：着色段不变量（区间合法、升序、互不重叠） ------------------------------
+
+    @Test
+    fun realWorldConfigLinesProduceValidSpans() {
+        val lines = listOf(
+            "# 锚点",
+            "pr: &pr {type: select, proxies: [节点选择, 香港自动, 全球直连]}",
+            "proxy-providers:",
+            "  atri:",
+            "    type: http",
+            "    interval: 86400",
+            "    health-check:",
+            "        enable: true",
+            "        url: \"https://www.gstatic.com/generate_204\"",
+            "global-ua: clash.meta",
+            "    ",
+            "external-controller: 127.0.0.1:9090",
+            "external-ui: ./dashboard",
+            "secret: 0020",
+            "  force-domain:",
+            "    - +.v2ex.com",
+            "    - \"Mijia Cloud\"",
+            "    - '+.wechat.com'",
+            "    - \"*\"",
+            "    - time.*.com",
+            "    - tls://223.5.5.5",
+            "    - https://doh.pub/dns-query",
+            "  'rule-set:bank_cn_domain,cn_domain':",
+            "    'rule-set:geolocation-!cn': ",
+            "  - name: \"🟢 直连\"",
+            "  - {name: AI, <<: *pr, proxies: [节点选择, 日本自动], icon: \"https://raw.githubusercontent.com/x/ai.png\"}",
+            "  - {name: Emby, <<: *pr, icon: https://raw.githubusercontent.com/x/emby.png}",
+            "  - {name: 香港节点, type: select, include-all: true, filter: \"(?i)(香港|hk|hongkong|Hong Kong)\", icon: \"https://x/hk.png\"}",
+            "      ports: [80, 8080-8880]",
+            "  - RULE-SET,ai!cn_domain,AI",
+            "  - MATCH,漏网之鱼",
+            "  ip: &ip {type: http, interval: 86400, behavior: ipcidr, format: mrs}",
+            "  ai!cn_domain: { <<: *domain, url: \"https://raw.githubusercontent.com/x.mrs\" }",
+            "  geolocation-!cn: { <<: *domain, url: \"https://x.mrs\" }",
+        )
+        var state: LineState? = null
+        for (line in lines) {
+            val r = h.highlightLine(line, state)
+            state = r.exitState
+            var prevEnd = 0
+            for (s in r.spans) {
+                assertTrue(s.end > s.start, "空/反向区间 in \"$line\": ${r.spans}")
+                assertTrue(s.start >= prevEnd, "乱序/重叠 in \"$line\": ${r.spans}")
+                assertTrue(s.end <= line.length, "越界 in \"$line\": ${r.spans}")
+                prevEnd = s.end
+            }
+        }
+        assertNull(state) // 全程无跨行结构挂起
+    }
+
+    @Test
+    fun realWorldSpotChecks() {
+        // 含 ! 的普通键仍是键。
+        assertEquals(TokenType.Key, typeAt("  geolocation-!cn: { a: 1 }", 2))
+        // 引号键内含冒号/逗号不拆键。
+        val quoted = "  'rule-set:bank_cn,cn_domain':"
+        val s = spans(quoted)
+        assertEquals(TokenType.Key, s[0].type)
+        assertEquals(2, s[0].start)
+        assertEquals(30, s[0].end)
+        // 块上下文带端口的地址整段一个标量。
+        val addr = "external-controller: 127.0.0.1:9090"
+        assertEquals(TokenType.String, typeAt(addr, 21))
+        assertEquals(TokenType.String, typeAt(addr, 34))
     }
 }
