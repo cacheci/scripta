@@ -27,6 +27,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -35,6 +36,7 @@ import top.yukonga.scripta.editor.EditorColors
 import top.yukonga.scripta.editor.EditorLanguage
 import top.yukonga.scripta.editor.LineNumberMode
 import top.yukonga.scripta.editor.highlight.SyntaxColors
+import top.yukonga.scripta.editor.highlight.TokenStyle
 import top.yukonga.scripta.editor.rememberCodeEditorController
 
 /** 演示可选的三套编辑器配色：两套内置预设 + 一套全槽位自定义。 */
@@ -59,17 +61,17 @@ private val CustomEditorColors = EditorColors(
     findMatchActive = Color(0x99FE8019),
     currentLine = Color(0xFF3C3836),
     syntax = SyntaxColors(
-        comment = Color(0xFF928374),
-        key = Color(0xFF83A598),
-        string = Color(0xFFB8BB26),
-        number = Color(0xFFD3869B),
-        boolean = Color(0xFFFB4934),
-        nullLike = Color(0xFFFB4934),
-        keyword = Color(0xFFFE8019),
-        punctuation = Color(0xFFA89984),
-        anchor = Color(0xFF8EC07C),
-        tag = Color(0xFF8EC07C),
-        directive = Color(0xFFFE8019),
+        comment = TokenStyle(Color(0xFF928374), fontStyle = FontStyle.Italic), // 斜体注释：展示样式槽位不止颜色
+        key = TokenStyle(Color(0xFF83A598)),
+        string = TokenStyle(Color(0xFFB8BB26)),
+        number = TokenStyle(Color(0xFFD3869B)),
+        boolean = TokenStyle(Color(0xFFFB4934)),
+        nullLike = TokenStyle(Color(0xFFFB4934)),
+        keyword = TokenStyle(Color(0xFFFE8019)),
+        punctuation = TokenStyle(Color(0xFFA89984)),
+        anchor = TokenStyle(Color(0xFF8EC07C)),
+        tag = TokenStyle(Color(0xFF8EC07C)),
+        directive = TokenStyle(Color(0xFFFE8019)),
     ),
 )
 

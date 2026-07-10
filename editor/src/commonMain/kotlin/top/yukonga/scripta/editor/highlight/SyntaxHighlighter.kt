@@ -1,9 +1,19 @@
 package top.yukonga.scripta.editor.highlight
 
-/** 语义 token 类型：插件产出「类型」、主题把类型映射为颜色——换主题不换插件、换插件不换主题。 */
-enum class TokenType { Comment, Key, String, Number, Boolean, Null, Keyword, Punctuation, Anchor, Tag, Directive }
+/**
+ * 语义 token 类型：插件产出「类型」、主题把类型映射为样式——换主题不换插件、换插件不换主题。
+ * 封闭枚举是刻意的：主题（[SyntaxColors]）对每个类型都是全量映射、没有回退链，
+ * 新增成员时穷举 when 会把漏配变成编译错误。
+ */
+enum class TokenType {
+    Comment, Key, String, Number, Boolean, Null, Keyword, Punctuation, Anchor, Tag, Directive,
+    Operator, Variable, Property, Function, Type, Escape, Regex, Heading,
+}
 
-/** 行内一段着色：[start, end) 列区间（UTF-16 char 列）+ 语义类型。区间按 start 升序、互不重叠。 */
+/**
+ * 行内一段着色：[start, end) 列区间（UTF-16 char 列）+ 语义类型。区间须按 start 升序、互不重叠；
+ * 未覆盖的空隙走基础前景色。越界区间在落到 AnnotatedString 时被钳到行内（防御，不作为契约依赖）。
+ */
 data class HighlightSpan(val start: Int, val end: Int, val type: TokenType)
 
 /**

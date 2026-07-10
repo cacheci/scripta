@@ -183,7 +183,11 @@ fun CodeEditor(
     softWrap: Boolean = false,
     lineNumberMode: LineNumberMode = LineNumberMode.PinnedToScreen,
     symbols: List<EditorSymbol> = DefaultEditorSymbols,
-    /** 语法高亮插件；null 时按 [language] 选内置插件（PlainText = 不高亮）。自定义插件优先于内置。 */
+    /**
+     * 语法高亮插件；null 时按 [language] 选内置插件（PlainText = 不高亮）。自定义插件优先于内置。
+     * 实例须跨重组稳定（`remember` 住再传入）——它是行状态链缓存与 layout 缓存的 key，
+     * 每次重组换新实例会把两级缓存整个冲掉、逐帧全量重算。
+     */
     highlighter: SyntaxHighlighter? = null,
 ) {
     val engine = controller.engine
@@ -287,7 +291,9 @@ fun CodeEditor(
     // 只有在此前提下才成立。含 CJK/全角/emoji 的长行——字形非等宽（横向漂移）、度量非 ASCII（竖直错位）——据此
     // 退回整行 shaping（layoutFor），走与普通行相同的精确 layout（光标/命中/CJK 基线对齐都对）。是否窄行按行缓存、
     // version 未变即命中；编辑后按「长度+hash 指纹」重校（不把整行内容留在缓存里）。含 CJK 的超长行退回 shaping 会整行重测，属罕见代价。
-    val narrowCache = remember { LruCache<Int, NarrowFlag>(256) }
+    // 以 engine 为 key：version 计数是每 buffer 独立的小整数（新开文档都从 2 起），换 controller 时
+    // 若沿用旧缓存，version 恰好相等会让快路径直接复用**上一份文档**的条目——必须随 engine 重建。
+    val narrowCache = remember(engine) { LruCache<Int, NarrowFlag>(256) }
     fun isNarrowLine(line: Int): Boolean {
         val version = engine.buffer.version
         val cached = narrowCache[line]
@@ -319,13 +325,18 @@ fun CodeEditor(
         EditorLanguage.PlainText -> null
     }
     val highlightCache = remember(resolvedHighlighter, engine) { resolvedHighlighter?.let { HighlightCache(it) } }
-    // 编辑后的状态链失效必须在**本次组合**里完成——layoutFor 马上要用；LaunchedEffect 晚一帧会让本帧
-    // 用旧状态测行。与 widestSeen 同法：非 state、写读均在组合内，按 version 去重。
+    // 编辑后的状态链失效必须在「取 spans 之前」完成，按 version 去重（非 state、UI 线程独占读写）。
+    // 不能只在组合里做：keep-in-view 收集器 / 边缘自动滚动等组合外路径也会在编辑后立刻调 layoutFor，
+    // 若彼时还没截断状态链，会用旧状态算出错误 spans 并以新 version 入 layout 缓存——回头快路径按
+    // version 命中，错误着色一直钉到下次编辑。故组合内与 layoutFor 内都先经此兜底。
     val highlightSeenVersion = remember(highlightCache) { intArrayOf(-1) }
-    if (highlightCache != null && highlightSeenVersion[0] != engine.buffer.version) {
-        highlightSeenVersion[0] = engine.buffer.version
-        highlightCache.invalidateFrom(engine.consumeDirtyLine())
+    fun ensureHighlightFresh() {
+        if (highlightCache != null && highlightSeenVersion[0] != engine.buffer.version) {
+            highlightSeenVersion[0] = engine.buffer.version
+            engine.consumeDirty()?.let { d -> highlightCache.invalidate(d.from, d.endExclusive, d.structural) }
+        }
     }
+    ensureHighlightFresh()
 
     val gutterDigits = EditorGeometry.gutterDigits(lineCount)
     val gutterWidthPx = remember(gutterDigits, numberStyle) {
@@ -355,12 +366,14 @@ fun CodeEditor(
     // 逐行 layout 缓存：只在宽度/模式/字号/配色/插件变化时整表失效，不再以 version 失效——否则每敲一个字符
     // 整表丢弃、可见行全部重测。失效改由下方按行「内容 + 着色段」比对精确处理（本行被编辑、或上游块标量
     // 状态改变本行着色才重测；插入/删除行的下标平移也会因内容不符自然重测）。有界 LRU：超上限淘汰最久未用。
-    val layoutCache = remember(softWrap, widthBucket, fontSizeSp, colors, resolvedHighlighter) {
+    // engine 入 key 同 narrowCache：跨文档的 version 快路径不可比。
+    val layoutCache = remember(engine, softWrap, widthBucket, fontSizeSp, colors, resolvedHighlighter) {
         LruCache<Int, CachedLayout>(4096)
     }
     fun layoutFor(line: Int): TextLayoutResult? {
         if (line < 0 || line >= engine.buffer.lineCount) return null
         if (isGridLine(line)) return null // 网格行不整行测量：绘制走可见列切片（EditorCanvas），几何走等宽算术
+        ensureHighlightFresh() // 组合外调用（keep-in-view 等）也先截断状态链，见声明处
         val version = engine.buffer.version
         val cached = layoutCache[line]
         // 快路：version 未变说明自上次校验以来无编辑 → 行文本与着色必然未变，跳过物化与 O(len) 比较，零分配。

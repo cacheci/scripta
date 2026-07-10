@@ -45,7 +45,7 @@ data class EditorColors(
     val findMatchActive: Color = Color(0x80FF6F00),
     /** 无选区时当前行的整行底色。带默认值（与深色 gutter 同值，沿用旧视觉），不破坏既有构造。 */
     val currentLine: Color = Color(0xFF252526),
-    /** 语法高亮配色（token 类型 → 颜色，逐槽位可自定义）。带默认值，不破坏既有构造。 */
+    /** 语法高亮样式（token 类型 → 颜色 + 可选粗细/斜体/装饰线，逐槽位可自定义）。带默认值，不破坏既有构造。 */
     val syntax: SyntaxColors = SyntaxColors.Dark,
 ) {
     companion object {

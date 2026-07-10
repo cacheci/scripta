@@ -13,6 +13,12 @@ import top.yukonga.scripta.editor.text.UndoHistory
 import top.yukonga.scripta.editor.text.UndoStep
 
 /**
+ * 自 [EditorEngine.consumeDirty] 上次消费以来编辑影响的行范围：非结构性时 `[from, endExclusive)`
+ * 之外的行内容保证未变；[structural] = 行数变过，行号已错位。
+ */
+internal data class DirtyRange(val from: Int, val endExclusive: Int, val structural: Boolean)
+
+/**
  * 编辑引擎：持有 TextBuffer + 归一化选择 + 可选 composing 区间，承载全部编辑/选择/IME 语义
  * （由 spike 的 MiniEditorState 推广到 (行,列) 坐标）。offset 只在 IME 边界经 piece-tree（buffer.offsetAt/positionAt）换算。
  *
@@ -116,7 +122,7 @@ class EditorEngine(initialText: String = "") {
         contentGeneration++ // 换文档：视图层据此重置横向范围等跨文档累积量
         history.clear() // 整篇替换 = 换文档，旧文档的编辑历史不再适用
         syncHistory()
-        markDirtyLine(0)
+        markDirty(0, Int.MAX_VALUE, structural = true)
         maybeNotify()
     }
 
@@ -141,7 +147,7 @@ class EditorEngine(initialText: String = "") {
         for (e in step.edits) {
             val start = buffer.positionAt(e.offset)
             val end = buffer.positionAt(e.offset + e.removed.length)
-            markDirtyLine(start.line)
+            markReplaceDirty(start.line, e.removed, e.inserted)
             buffer.replace(TextRange(start, end), e.inserted)
         }
         anchor = buffer.positionAt(step.selection.anchor)
@@ -168,9 +174,9 @@ class EditorEngine(initialText: String = "") {
         val start = buffer.clamp(r.start)
         val startOff = buffer.offsetAt(start)
         val removed = buffer.textInRange(r)
-        markDirtyLine(start.line)
         val newCaret = buffer.replace(r, text)
         val inserted = buffer.textInRange(TextRange(start, newCaret))
+        markReplaceDirty(start.line, removed, inserted)
         return TextEdit(startOff, removed, inserted) to newCaret
     }
 
@@ -178,21 +184,40 @@ class EditorEngine(initialText: String = "") {
     private fun isSingleCodePoint(s: String): Boolean =
         s.length == 1 || (s.length == 2 && s[0].isHighSurrogate() && s[1].isLowSurrogate())
 
-    // 自上次 consumeDirtyLine 以来编辑触及的最小行号（下界；初始 0 = 整篇待处理）。
-    private var dirtyFromLine = 0
+    // 自上次 consumeDirty 以来编辑触及的行范围并集 + 是否有行数变化（初始 = 整篇结构性待处理）。
+    private var dirtyFrom = 0
+    private var dirtyEndEx = Int.MAX_VALUE
+    private var dirtyStructural = true
+    private var hasDirty = true
 
     /**
-     * 取走「最早受编辑影响的行号」并复位（下界语义；无编辑时返回 Int.MAX_VALUE）。高亮的行状态链
-     * 据此只从该行起重算——引擎不暴露完整编辑 delta，这个单调最小值已足够正确失效。
+     * 取走「自上次消费以来的编辑影响范围」并复位；无编辑时返回 null。
+     * [DirtyRange.structural] = 行数变过（行号错位，按行号索引的缓存尾部不可再比对复用）；
+     * 非结构性时 `[from, endExclusive)` 之外的行内容保证未变。多次编辑取范围并集、
+     * 结构性按或——非结构性编辑不移动行号，并集在消费前始终对同一套行号成立。
      */
-    internal fun consumeDirtyLine(): Int {
-        val v = dirtyFromLine
-        dirtyFromLine = Int.MAX_VALUE
-        return v
+    internal fun consumeDirty(): DirtyRange? {
+        if (!hasDirty) return null
+        val d = DirtyRange(dirtyFrom, dirtyEndEx, dirtyStructural)
+        hasDirty = false
+        dirtyFrom = Int.MAX_VALUE
+        dirtyEndEx = 0
+        dirtyStructural = false
+        return d
     }
 
-    private fun markDirtyLine(line: Int) {
-        if (line < dirtyFromLine) dirtyFromLine = line
+    private fun markDirty(fromLine: Int, endExclusive: Int, structural: Boolean) {
+        hasDirty = true
+        if (fromLine < dirtyFrom) dirtyFrom = fromLine
+        if (endExclusive > dirtyEndEx) dirtyEndEx = endExclusive
+        if (structural) dirtyStructural = true
+    }
+
+    /** 一次替换对行的影响：从起始行到「删除/插入较多者」的行尾界；换行数不等即结构性。 */
+    private fun markReplaceDirty(startLine: Int, removed: String, inserted: String) {
+        val rb = removed.count { it == '\n' }
+        val ib = inserted.count { it == '\n' }
+        markDirty(startLine, startLine + maxOf(rb, ib) + 1, structural = rb != ib)
     }
 
     /**
