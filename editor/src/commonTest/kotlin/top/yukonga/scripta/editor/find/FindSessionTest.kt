@@ -32,6 +32,19 @@ class FindSessionTest {
     }
 
     @Test
+    fun openModesAreExclusive() {
+        val (_, s) = session("hello")
+        s.open(withReplace = true)
+        assertTrue(s.replaceVisible)
+        // 纯查找模式不提供替换能力：已展开的替换行必须收起。
+        s.open(withReplace = false)
+        assertTrue(s.visible)
+        assertFalse(s.replaceVisible)
+        s.open(withReplace = true)
+        assertTrue(s.replaceVisible)
+    }
+
+    @Test
     fun refreshComputesMatchesAndActiveFromCaret() {
         val (e, s) = session("cat dog cat dog cat")
         e.setCursor(TextPosition(0, 5)) // 光标在第一个 cat 之后

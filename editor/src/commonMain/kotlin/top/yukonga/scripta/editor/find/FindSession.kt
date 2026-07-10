@@ -43,7 +43,8 @@ class FindSession internal constructor(private val engine: EditorEngine) {
 
     fun open(withReplace: Boolean) {
         visible = true
-        if (withReplace) replaceVisible = true
+        // 两种模式互斥：纯查找不提供替换能力，打开时收起已展开的替换行。
+        replaceVisible = withReplace
         // 有单行选区时以选中文本预填查询（多行选区不预填——查询框是单行语义）。
         val selected = engine.selectedText()
         if (!selected.isNullOrEmpty() && !selected.contains('\n')) query = selected

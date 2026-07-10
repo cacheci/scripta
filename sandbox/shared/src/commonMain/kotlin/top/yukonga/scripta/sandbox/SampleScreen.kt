@@ -123,7 +123,7 @@ fun SampleScreen(modifier: Modifier = Modifier) {
             .fillMaxSize()
             .background(cWindow)
     ) {
-        FlowRow(
+        Column(
             Modifier
                 .fillMaxWidth()
                 .background(cBar)
@@ -133,8 +133,9 @@ fun SampleScreen(modifier: Modifier = Modifier) {
                         .only(WindowInsetsSides.Top)
                 )
                 .padding(8.dp)
-            // 演示开关越加越多，窄屏一行放不下：FlowRow 自动折行（窄屏两行、宽屏一行）。
         ) {
+        // 第一行：文档 / 视图开关（FlowRow 兜底折行，防超窄屏溢出）。
+        FlowRow(Modifier.fillMaxWidth()) {
             BasicText(
                 text = "  打开  ",
                 style = TextStyle(color = cOpen, fontSize = 13.sp),
@@ -186,6 +187,23 @@ fun SampleScreen(modifier: Modifier = Modifier) {
                     }
                 },
             )
+            (errorMessage ?: openedName)?.let {
+                BasicText(
+                    text = it,
+                    style = TextStyle(color = cName, fontSize = 13.sp),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    softWrap = false,
+                    // FlowRow 的折行布局没有「剩余空间」语义可分（weight 不适用）；给个上限宽即可。
+                    modifier = Modifier
+                        .widthIn(max = 220.dp)
+                        .padding(start = 4.dp),
+                )
+            }
+        }
+        // 第二行：编辑动作（撤销 / 重做 / 查找 / 替换）单独一行。查找与替换是两种互斥模式：
+        // 查找不带替换行；各按钮再点一次关闭自己的模式。
+        Row {
             BasicText(
                 text = "  撤销  ",
                 style = TextStyle(color = if (controller.canUndo) cHistory else cHistoryOff, fontSize = 13.sp),
@@ -200,22 +218,25 @@ fun SampleScreen(modifier: Modifier = Modifier) {
                 text = "  查找  ",
                 style = TextStyle(color = cOpen, fontSize = 13.sp),
                 modifier = Modifier.clickable {
-                    if (controller.isFindVisible) controller.closeFind() else controller.openReplace()
+                    if (controller.isFindVisible && !controller.isReplaceVisible) {
+                        controller.closeFind()
+                    } else {
+                        controller.openFind()
+                    }
                 },
             )
-            (errorMessage ?: openedName)?.let {
-                BasicText(
-                    text = it,
-                    style = TextStyle(color = cName, fontSize = 13.sp),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    softWrap = false,
-                    // FlowRow 的折行布局没有「剩余空间」语义可分（weight 不适用）；给个上限宽即可。
-                    modifier = Modifier
-                        .widthIn(max = 220.dp)
-                        .padding(start = 4.dp),
-                )
-            }
+            BasicText(
+                text = "  替换  ",
+                style = TextStyle(color = cOpen, fontSize = 13.sp),
+                modifier = Modifier.clickable {
+                    if (controller.isFindVisible && controller.isReplaceVisible) {
+                        controller.closeFind()
+                    } else {
+                        controller.openReplace()
+                    }
+                },
+            )
+        }
         }
         CodeEditor(
             controller = controller,

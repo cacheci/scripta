@@ -25,11 +25,13 @@ class CodeEditorController internal constructor() {
     val canUndo: Boolean get() = engine.canUndo
     val canRedo: Boolean get() = engine.canRedo
 
-    /** 打开查找 / 查找替换浮条、关闭浮条。宿主可编程驱动（工具栏按钮等）；快捷键在编辑器内部已接。 */
+    /** 打开查找 / 查找替换条（两种模式互斥：纯查找不带替换行）、关闭。宿主可编程驱动（工具栏按钮等）；
+     *  快捷键在编辑器内部已接。 */
     fun openFind() = find.open(withReplace = false)
     fun openReplace() = find.open(withReplace = true)
     fun closeFind() = find.close()
     val isFindVisible: Boolean get() = find.visible
+    val isReplaceVisible: Boolean get() = find.replaceVisible
 
     /** 替换整篇。供 [CodeEditor] 播种初始文本。 */
     internal fun setText(value: String) {
