@@ -3,9 +3,14 @@ package top.yukonga.scripta.editor
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import top.yukonga.scripta.editor.text.EditKind
+import top.yukonga.scripta.editor.text.SelectionState
 import top.yukonga.scripta.editor.text.TextBuffer
+import top.yukonga.scripta.editor.text.TextEdit
 import top.yukonga.scripta.editor.text.TextPosition
 import top.yukonga.scripta.editor.text.TextRange
+import top.yukonga.scripta.editor.text.UndoHistory
+import top.yukonga.scripta.editor.text.UndoStep
 
 /**
  * 编辑引擎：持有 TextBuffer + 归一化选择 + 可选 composing 区间，承载全部编辑/选择/IME 语义
@@ -55,6 +60,14 @@ class EditorEngine(initialText: String = "") {
     var imeListener: ImeListener? = null
     var requestShowKeyboard: (() -> Unit)? = null
 
+    private val history = UndoHistory()
+
+    // 快照 state 供 UI（菜单置灰 / 工具栏按钮）观测；随每次历史变动同步。
+    var canUndo: Boolean by mutableStateOf(false)
+        private set
+    var canRedo: Boolean by mutableStateOf(false)
+        private set
+
     private var batchDepth = 0
 
     init {
@@ -101,8 +114,66 @@ class EditorEngine(initialText: String = "") {
         composing = null
         desiredColumn = null
         contentGeneration++ // 换文档：视图层据此重置横向范围等跨文档累积量
+        history.clear() // 整篇替换 = 换文档，旧文档的编辑历史不再适用
+        syncHistory()
         maybeNotify()
     }
+
+    // --- 撤销 / 重做 -------------------------------------------------------------------------
+
+    fun undo(): Boolean {
+        val step = history.undo() ?: return false
+        applyStep(step)
+        return true
+    }
+
+    fun redo(): Boolean {
+        val step = history.redo() ?: return false
+        applyStep(step)
+        return true
+    }
+
+    /** 回放一步历史：按序应用增量，再把 anchor/head 恢复到快照（保留选区方向）。 */
+    private fun applyStep(step: UndoStep) {
+        composing = null
+        desiredColumn = null
+        for (e in step.edits) {
+            val start = buffer.positionAt(e.offset)
+            val end = buffer.positionAt(e.offset + e.removed.length)
+            buffer.replace(TextRange(start, end), e.inserted)
+        }
+        anchor = buffer.positionAt(step.selection.anchor)
+        head = buffer.positionAt(step.selection.head)
+        selection = TextRange(anchor, head).normalized()
+        syncHistory()
+        maybeNotify()
+    }
+
+    private fun syncHistory() {
+        canUndo = history.canUndo
+        canRedo = history.canRedo
+    }
+
+    /** 当前 anchor/head 的扁平 offset 快照（撤销单元的选区端）。 */
+    private fun selectionSnapshot() = SelectionState(buffer.offsetAt(anchor), buffer.offsetAt(head))
+
+    /**
+     * 执行替换并收集增量：removed 在替换前取原文，inserted 从缓冲回读——回读到的才是真正入档的文本
+     * （buffer.replace 会把 CRLF 规整成 LF，直接记入参会与文档不符、重做长度错位）。
+     */
+    private fun replaceCollecting(range: TextRange, text: String): Pair<TextEdit, TextPosition> {
+        val r = range.normalized()
+        val start = buffer.clamp(r.start)
+        val startOff = buffer.offsetAt(start)
+        val removed = buffer.textInRange(r)
+        val newCaret = buffer.replace(r, text)
+        val inserted = buffer.textInRange(TextRange(start, newCaret))
+        return TextEdit(startOff, removed, inserted) to newCaret
+    }
+
+    /** 单码点判定（含代理对）：单字符键入的合并粒度。 */
+    private fun isSingleCodePoint(s: String): Boolean =
+        s.length == 1 || (s.length == 2 && s[0].isHighSurrogate() && s[1].isLowSurrogate())
 
     // --- 选择 --------------------------------------------------------------------------------
 
@@ -112,6 +183,7 @@ class EditorEngine(initialText: String = "") {
         selection = TextRange(anchor, head).normalized()
         if (!keepComposing) composing = null
         desiredColumn = null
+        history.breakMerge() // 显式定位是语义断点：其后键入不并入此前的输入单元
         maybeNotify()
     }
 
@@ -123,6 +195,7 @@ class EditorEngine(initialText: String = "") {
         selection = TextRange(anchor, head).normalized()
         composing = null
         desiredColumn = null
+        history.breakMerge() // 与 setSelection 同理：选区变动后不再并入此前的输入单元
         maybeNotify()
     }
 
@@ -130,11 +203,14 @@ class EditorEngine(initialText: String = "") {
 
     // --- 编辑原语 ----------------------------------------------------------------------------
 
-    private fun replaceRange(range: TextRange, text: String) {
-        val newCaret = buffer.replace(range, text)
+    private fun replaceRange(range: TextRange, text: String, kind: EditKind = EditKind.Other) {
+        val selBefore = selectionSnapshot()
+        val (edit, newCaret) = replaceCollecting(range, text)
         composing = null
         desiredColumn = null
         collapseCaret(newCaret)
+        history.record(edit, selBefore, selectionSnapshot(), kind)
+        syncHistory()
         maybeNotify()
     }
 
@@ -142,10 +218,21 @@ class EditorEngine(initialText: String = "") {
 
     fun commitText(text: String, newCursorPosition: Int) {
         val target = (composing ?: selection).normalized()
-        val newCaret = buffer.replace(target, text)
+        val wasComposing = composing != null
+        val selBefore = selectionSnapshot()
+        val (edit, newCaret) = replaceCollecting(target, text)
         composing = null
         desiredColumn = null
         collapseCaret(cursorAfterInsert(target.start, newCursorPosition, newCaret))
+        // 预编辑中的提交并入本次会话单元并封口；否则单码点纯插入按键入合并，多字符（粘贴 / 整词提交）自成单元。
+        val kind = when {
+            wasComposing -> EditKind.Composing
+            edit.removed.isEmpty() && isSingleCodePoint(edit.inserted) -> EditKind.Typing
+            else -> EditKind.Other
+        }
+        history.record(edit, selBefore, selectionSnapshot(), kind)
+        if (wasComposing) history.breakMerge() // 提交结束会话：下个会话 / 键入不并入
+        syncHistory()
         maybeNotify()
     }
 
@@ -156,7 +243,7 @@ class EditorEngine(initialText: String = "") {
             replaceRange(selection, ""); return
         }
         val prev = previousCodePointPosition(selStart) ?: return
-        replaceRange(TextRange(prev, selStart), "")
+        replaceRange(TextRange(prev, selStart), "", EditKind.DeleteBackward)
     }
 
     fun deleteForward() {
@@ -164,17 +251,20 @@ class EditorEngine(initialText: String = "") {
             replaceRange(selection, ""); return
         }
         val next = nextCodePointPosition(selEnd) ?: return
-        replaceRange(TextRange(selEnd, next), "")
+        replaceRange(TextRange(selEnd, next), "", EditKind.DeleteForward)
     }
 
     // --- IME composing -----------------------------------------------------------------------
 
     fun setComposingText(text: String, newCursorPosition: Int) {
         val target = (composing ?: selection).normalized()
-        val newCaret = buffer.replace(target, text)
+        val selBefore = selectionSnapshot()
+        val (edit, newCaret) = replaceCollecting(target, text)
         composing = if (text.isEmpty()) null else TextRange(target.start, newCaret)
         desiredColumn = null
         collapseCaret(cursorAfterInsert(target.start, newCursorPosition, newCaret))
+        history.record(edit, selBefore, selectionSnapshot(), EditKind.Composing)
+        syncHistory()
         maybeNotify()
     }
 
@@ -188,6 +278,7 @@ class EditorEngine(initialText: String = "") {
     fun finishComposing() {
         if (composing != null) {
             composing = null
+            history.breakMerge() // 会话就此定格：其后编辑不再并入本次预编辑单元
             maybeNotify()
         }
     }
@@ -199,12 +290,20 @@ class EditorEngine(initialText: String = "") {
         val total = buffer.totalLength()
         val delStart = (selS - before.coerceAtLeast(0)).coerceAtLeast(0)
         val delEnd = (selE + after.coerceAtLeast(0)).coerceAtMost(total)
+        val selBefore = selectionSnapshot()
         // 先删尾段（不影响其前的 offset），再删头段。piece-tree 即时一致，无需失效索引。
-        buffer.replace(TextRange(buffer.positionAt(selE), buffer.positionAt(delEnd)), "")
-        buffer.replace(TextRange(buffer.positionAt(delStart), buffer.positionAt(selS)), "")
+        val (tailEdit, _) = replaceCollecting(TextRange(buffer.positionAt(selE), buffer.positionAt(delEnd)), "")
+        val (headEdit, _) = replaceCollecting(TextRange(buffer.positionAt(delStart), buffer.positionAt(selS)), "")
         composing = null
         desiredColumn = null
         collapseCaret(buffer.positionAt(delStart))
+        // 两段删除是同一 IME 请求：归入同一撤销单元（撤销逆序回放、重做按原序回放）。
+        val selAfter = selectionSnapshot()
+        history.beginGroup()
+        history.record(tailEdit, selBefore, selAfter, EditKind.Other)
+        history.record(headEdit, selBefore, selAfter, EditKind.Other)
+        history.endGroup()
+        syncHistory()
         maybeNotify()
     }
 

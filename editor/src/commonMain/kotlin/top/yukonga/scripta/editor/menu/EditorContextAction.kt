@@ -3,12 +3,14 @@ package top.yukonga.scripta.editor.menu
 import androidx.compose.ui.unit.IntOffset
 import kotlin.math.roundToInt
 
-/** 剪贴 / 选择的语义操作。触屏悬浮条与桌面右键菜单共用同一套动作与执行器。 */
-enum class EditorContextAction { Cut, Copy, Paste, SelectAll }
+/** 剪贴 / 选择 / 历史的语义操作。触屏悬浮条与桌面右键菜单共用同一套动作与执行器。 */
+enum class EditorContextAction { Undo, Redo, Cut, Copy, Paste, SelectAll }
 
 /** 中文显示名（宿主 Mishka 为中文界面；如需本地化可后续经参数外露）。 */
 val EditorContextAction.zhLabel: String
     get() = when (this) {
+        EditorContextAction.Undo -> "撤销"
+        EditorContextAction.Redo -> "重做"
         EditorContextAction.Cut -> "剪切"
         EditorContextAction.Copy -> "复制"
         EditorContextAction.Paste -> "粘贴"
@@ -16,20 +18,25 @@ val EditorContextAction.zhLabel: String
     }
 
 /**
- * 四个操作在当前编辑器状态下是否「适用」。纯数据，供两种呈现各自决定隐藏（触屏悬浮条）或置灰（桌面右键）。
+ * 各操作在当前编辑器状态下是否「适用」。纯数据，供两种呈现各自决定隐藏（触屏悬浮条）或置灰（桌面右键）。
  *
  * - [cut]：可编辑且有非空选区。
  * - [copy]：有非空选区（只读也能复制）。
  * - [paste]：可编辑即可（剪贴板是否有文本要 suspend 读，不在此判定——空剪贴板粘贴自然 no-op，与硬键盘一致）。
  * - [selectAll]：文档非空且尚未全选。
+ * - [undo] / [redo]：可编辑且对应历史栈非空。
  */
 data class ContextActionAvailability(
     val cut: Boolean,
     val copy: Boolean,
     val paste: Boolean,
     val selectAll: Boolean,
+    val undo: Boolean = false,
+    val redo: Boolean = false,
 ) {
     fun isAvailable(action: EditorContextAction): Boolean = when (action) {
+        EditorContextAction.Undo -> undo
+        EditorContextAction.Redo -> redo
         EditorContextAction.Cut -> cut
         EditorContextAction.Copy -> copy
         EditorContextAction.Paste -> paste
@@ -42,11 +49,15 @@ fun contextActionAvailability(
     hasSelection: Boolean,
     allSelected: Boolean,
     docNonEmpty: Boolean,
+    canUndo: Boolean = false,
+    canRedo: Boolean = false,
 ): ContextActionAvailability = ContextActionAvailability(
     cut = !readOnly && hasSelection,
     copy = hasSelection,
     paste = !readOnly,
     selectAll = docNonEmpty && !allSelected,
+    undo = !readOnly && canUndo,
+    redo = !readOnly && canRedo,
 )
 
 /**

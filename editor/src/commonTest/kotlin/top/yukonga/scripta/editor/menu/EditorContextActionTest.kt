@@ -82,6 +82,41 @@ class EditorContextActionTest {
         )
     }
 
+    // --- 撤销 / 重做可用性 -------------------------------------------------------------------
+
+    @Test
+    fun undoRedo_followHistoryState() {
+        val av = contextActionAvailability(
+            readOnly = false, hasSelection = false, allSelected = false, docNonEmpty = true,
+            canUndo = true, canRedo = false,
+        )
+        assertEquals(true, av.undo)
+        assertEquals(false, av.redo)
+        assertEquals(true, av.isAvailable(EditorContextAction.Undo))
+        assertEquals(false, av.isAvailable(EditorContextAction.Redo))
+    }
+
+    @Test
+    fun readOnly_disablesUndoRedo() {
+        val av = contextActionAvailability(
+            readOnly = true, hasSelection = false, allSelected = false, docNonEmpty = true,
+            canUndo = true, canRedo = true,
+        )
+        assertEquals(false, av.undo)
+        assertEquals(false, av.redo)
+    }
+
+    @Test
+    fun touch_neverShowsUndoRedo() {
+        val av = contextActionAvailability(
+            readOnly = false, hasSelection = true, allSelected = false, docNonEmpty = true,
+            canUndo = true, canRedo = true,
+        )
+        assertEquals(false, visibleTouchActions(av, hasSelection = true).any {
+            it == EditorContextAction.Undo || it == EditorContextAction.Redo
+        })
+    }
+
     // --- 悬浮条落点：上方优先、near-top 翻下、横向钳制 --------------------------------------
 
     @Test

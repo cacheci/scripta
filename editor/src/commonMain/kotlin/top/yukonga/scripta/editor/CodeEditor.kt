@@ -966,11 +966,13 @@ fun CodeEditor(
                     // 平台各异的剪贴板 / 导航快捷键先经 resolveEditorKeyCommand 归一（mac=Cmd/Opt，其余=Ctrl）。
                     resolveEditorKeyCommand(ev)?.let { cmd ->
                         when (cmd) {
-                            // 剪贴/全选统一走执行器（只读门在其内：复制/全选可用、剪切/粘贴 no-op）。
+                            // 剪贴/全选/撤销/重做统一走执行器（只读门在其内：复制/全选可用、改文档的动作 no-op）。
                             EditorKeyCommand.SelectAll -> clipboardActions.perform(EditorContextAction.SelectAll)
                             EditorKeyCommand.Copy -> clipboardActions.perform(EditorContextAction.Copy)
                             EditorKeyCommand.Cut -> clipboardActions.perform(EditorContextAction.Cut)
                             EditorKeyCommand.Paste -> clipboardActions.perform(EditorContextAction.Paste)
+                            EditorKeyCommand.Undo -> clipboardActions.perform(EditorContextAction.Undo)
+                            EditorKeyCommand.Redo -> clipboardActions.perform(EditorContextAction.Redo)
 
                             EditorKeyCommand.WordLeft -> engine.moveCaretByWord(-1, shift)
                             EditorKeyCommand.WordRight -> engine.moveCaretByWord(1, shift)

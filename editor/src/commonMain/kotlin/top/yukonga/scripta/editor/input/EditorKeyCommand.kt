@@ -5,11 +5,13 @@ import androidx.compose.ui.input.key.KeyEvent
 import androidx.compose.ui.input.key.isAltPressed
 import androidx.compose.ui.input.key.isCtrlPressed
 import androidx.compose.ui.input.key.isMetaPressed
+import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
 
-/** 语义编辑命令：把平台各异的按键组合归一，供 onKeyEvent 派发（Shift 由调用方另读，决定是否扩选）。 */
+/** 语义编辑命令：把平台各异的按键组合归一，供 onKeyEvent 派发（导航命令的 Shift 由调用方另读，决定是否扩选；
+ *  撤销/重做的 Shift 参与命令区分，在此读取）。 */
 enum class EditorKeyCommand {
-    SelectAll, Copy, Cut, Paste,
+    SelectAll, Copy, Cut, Paste, Undo, Redo,
     WordLeft, WordRight, LineStart, LineEnd, DocStart, DocEnd, PageUp, PageDown,
 }
 
@@ -21,6 +23,8 @@ internal fun resolveCtrlBased(e: KeyEvent): EditorKeyCommand? {
         Key.C -> if (ctrl) EditorKeyCommand.Copy else null
         Key.X -> if (ctrl) EditorKeyCommand.Cut else null
         Key.V -> if (ctrl) EditorKeyCommand.Paste else null
+        Key.Z -> if (ctrl) (if (e.isShiftPressed) EditorKeyCommand.Redo else EditorKeyCommand.Undo) else null
+        Key.Y -> if (ctrl) EditorKeyCommand.Redo else null
         Key.DirectionLeft -> if (ctrl) EditorKeyCommand.WordLeft else null
         Key.DirectionRight -> if (ctrl) EditorKeyCommand.WordRight else null
         Key.MoveHome -> if (ctrl) EditorKeyCommand.DocStart else EditorKeyCommand.LineStart
@@ -40,6 +44,7 @@ internal fun resolveMacBased(e: KeyEvent): EditorKeyCommand? {
         Key.C -> if (cmd) EditorKeyCommand.Copy else null
         Key.X -> if (cmd) EditorKeyCommand.Cut else null
         Key.V -> if (cmd) EditorKeyCommand.Paste else null
+        Key.Z -> if (cmd) (if (e.isShiftPressed) EditorKeyCommand.Redo else EditorKeyCommand.Undo) else null
         Key.DirectionLeft -> when {
             opt -> EditorKeyCommand.WordLeft
             cmd -> EditorKeyCommand.LineStart

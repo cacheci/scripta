@@ -22,6 +22,10 @@ internal class EditorClipboardActions(
 ) {
     fun perform(action: EditorContextAction) {
         when (action) {
+            EditorContextAction.Undo -> if (!readOnly()) engine.undo()
+
+            EditorContextAction.Redo -> if (!readOnly()) engine.redo()
+
             EditorContextAction.Copy -> engine.selectedText()?.let { txt ->
                 scope.launch { clipboard.setClipEntry(plainTextClipEntry(txt)) }
             }

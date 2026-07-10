@@ -58,6 +58,8 @@ fun SampleScreen(modifier: Modifier = Modifier) {
     val cLineNo = if (dark) Color(0xFFB39DDB) else Color(0xFF7E57C2)
     val cTheme = if (dark) Color(0xFFF48FB1) else Color(0xFFC2185B)
     val cName = if (dark) Color(0xFF858585) else Color(0xFF6B6B6B)
+    val cHistory = if (dark) Color(0xFF80CBC4) else Color(0xFF00796B)
+    val cHistoryOff = cHistory.copy(alpha = 0.35f)
 
     val opener = rememberDocumentOpener(
         onOpened = { name, content ->
@@ -126,6 +128,16 @@ fun SampleScreen(modifier: Modifier = Modifier) {
                 text = if (dark) "  主题: 深  " else "  主题: 浅  ",
                 style = TextStyle(color = cTheme, fontSize = 13.sp),
                 modifier = Modifier.clickable { darkOverride = !dark },
+            )
+            BasicText(
+                text = "  撤销  ",
+                style = TextStyle(color = if (controller.canUndo) cHistory else cHistoryOff, fontSize = 13.sp),
+                modifier = Modifier.clickable { controller.undo() },
+            )
+            BasicText(
+                text = "  重做  ",
+                style = TextStyle(color = if (controller.canRedo) cHistory else cHistoryOff, fontSize = 13.sp),
+                modifier = Modifier.clickable { controller.redo() },
             )
             (errorMessage ?: openedName)?.let {
                 BasicText(

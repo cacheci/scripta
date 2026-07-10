@@ -17,4 +17,18 @@ class CodeEditorControllerTest {
         c.setText("abc")
         assertEquals("abc", c.engine.getText())
     }
+
+    @Test
+    fun undoRedoDelegateToEngine() {
+        val c = CodeEditorController()
+        c.setText("abc")
+        c.engine.insert("X")
+        assertEquals(true, c.canUndo)
+        assertEquals(true, c.undo())
+        assertEquals("abc", c.getText())
+        assertEquals(true, c.canRedo)
+        assertEquals(true, c.redo())
+        assertEquals("Xabc", c.getText())
+        assertEquals(false, c.redo())
+    }
 }

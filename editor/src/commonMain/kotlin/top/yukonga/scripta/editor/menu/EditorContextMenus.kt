@@ -202,6 +202,8 @@ internal fun EditorContextMenu(
         hasSelection = !engine.selection.isEmpty,
         allSelected = engine.isAllSelected(),
         docNonEmpty = engine.buffer.totalLength() > 0,
+        canUndo = engine.canUndo,
+        canRedo = engine.canRedo,
     )
 
     val density = LocalDensity.current
@@ -237,6 +239,7 @@ internal fun EditorContextMenu(
                 .width(IntrinsicSize.Max),
         ) {
             listOf(
+                EditorContextAction.Undo, EditorContextAction.Redo,
                 EditorContextAction.Cut, EditorContextAction.Copy,
                 EditorContextAction.Paste, EditorContextAction.SelectAll,
             ).forEach { action ->

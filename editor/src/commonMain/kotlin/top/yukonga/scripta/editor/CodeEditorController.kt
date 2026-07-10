@@ -16,6 +16,12 @@ class CodeEditorController internal constructor() {
     /** 拉取当前文档文本。 */
     fun getText(): String = engine.getText()
 
+    /** 撤销 / 重做（无可回退历史时返回 false）。可用性经 [canUndo]/[canRedo]（快照 state）观测。 */
+    fun undo(): Boolean = engine.undo()
+    fun redo(): Boolean = engine.redo()
+    val canUndo: Boolean get() = engine.canUndo
+    val canRedo: Boolean get() = engine.canRedo
+
     /** 替换整篇。供 [CodeEditor] 播种初始文本。 */
     internal fun setText(value: String) {
         if (engine.getText() != value) engine.setText(value)
