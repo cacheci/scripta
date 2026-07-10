@@ -70,7 +70,9 @@ internal fun FindReplaceBar(
         Modifier
             .fillMaxWidth()
             .background(colors.symbolBarBackground)
-            .padding(6.dp),
+            // 顶部不加内边距：条的上邻（宿主工具栏）通常自带底部间距、且与本条底色相近，
+            // 再叠一段会显成一大块空档；左右与底部照常。
+            .padding(start = 6.dp, end = 6.dp, bottom = 6.dp),
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
