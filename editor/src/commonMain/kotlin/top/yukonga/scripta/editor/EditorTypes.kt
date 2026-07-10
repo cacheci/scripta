@@ -39,6 +39,9 @@ data class EditorColors(
     val symbolBarBackground: Color = Color(0xFF2A2A2C),
     val symbolBarForeground: Color = Color(0xFFCFCFCF),
     val symbolBarPressed: Color = Color(0x33FFFFFF),
+    /** 查找命中的底色 / 当前命中的强调底色（画在选区之下）。带默认值，不破坏既有构造。 */
+    val findMatch: Color = Color(0x4DFFC107),
+    val findMatchActive: Color = Color(0x80FF6F00),
 ) {
     companion object {
         /** A neutral dark default so the scaffold renders visibly before a theme is wired up. */

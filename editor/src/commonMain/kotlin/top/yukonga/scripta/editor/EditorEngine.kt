@@ -175,6 +175,31 @@ class EditorEngine(initialText: String = "") {
     private fun isSingleCodePoint(s: String): Boolean =
         s.length == 1 || (s.length == 2 && s[0].isHighSurrogate() && s[1].isLowSurrogate())
 
+    /**
+     * 把 [ranges]（扁平 offset 区间 (start, end)，升序且互不重叠）全部替换为 [replacement]，
+     * 整个操作为一个撤销单元；返回替换数。降序应用——先替换靠后的区间，前面区间的 offset 不受影响。
+     * 光标落在首个（offset 最小）替换段末尾：降序应用后该 offset 已定格。
+     */
+    fun replaceAllOffsetRanges(ranges: List<Pair<Int, Int>>, replacement: String): Int {
+        if (ranges.isEmpty()) return 0
+        val selBefore = selectionSnapshot()
+        val edits = ArrayList<TextEdit>(ranges.size)
+        for ((s, e) in ranges.asReversed()) {
+            val (edit, _) = replaceCollecting(TextRange(buffer.positionAt(s), buffer.positionAt(e)), replacement)
+            edits.add(edit)
+        }
+        composing = null
+        desiredColumn = null
+        collapseCaret(buffer.positionAt(ranges.first().first + edits.last().inserted.length))
+        val selAfter = selectionSnapshot()
+        history.beginGroup()
+        for (edit in edits) history.record(edit, selBefore, selAfter, EditKind.Other)
+        history.endGroup()
+        syncHistory()
+        maybeNotify()
+        return ranges.size
+    }
+
     // --- 选择 --------------------------------------------------------------------------------
 
     fun setSelection(a: TextPosition, b: TextPosition, keepComposing: Boolean = false) {

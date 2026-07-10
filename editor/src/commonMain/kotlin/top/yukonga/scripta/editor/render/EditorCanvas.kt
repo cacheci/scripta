@@ -43,6 +43,7 @@ import top.yukonga.scripta.editor.EditorColors
 import top.yukonga.scripta.editor.EditorEngine
 import top.yukonga.scripta.editor.LineNumberMode
 import top.yukonga.scripta.editor.LruCache
+import top.yukonga.scripta.editor.find.FindSpan
 import top.yukonga.scripta.editor.text.TextPosition
 import top.yukonga.scripta.editor.text.TextRange
 import kotlin.math.PI
@@ -127,6 +128,8 @@ fun EditorCanvas(
     gridRefBaseline: Float,
     gridRefCursorTop: Float,
     gridRefCursorBottom: Float,
+    findSpansForLine: (Int) -> List<FindSpan> = { emptyList() },
+    activeFindIndex: () -> Int = { -1 },
     previewScale: () -> Float = { 1f },
     previewTx: () -> Float = { 0f },
     previewTy: () -> Float = { 0f },
@@ -200,6 +203,20 @@ fun EditorCanvas(
                         if (sel.isEmpty && sel.start.line == line) {
                             drawRect(colors.gutterBackground, topLeft = Offset(hlLeft, top), size = Size(hlWidth, h))
                         }
+                        // 查找命中底色（选区之下）：网格行走等宽算术。当前命中用强调色。
+                        val findSpans = findSpansForLine(line)
+                        if (findSpans.isNotEmpty()) {
+                            val act = activeFindIndex()
+                            for (sp in findSpans) {
+                                val fS = sp.startCol.coerceIn(0, lineLen)
+                                val fE = sp.endCol.coerceIn(0, lineLen)
+                                if (fE > fS) drawRect(
+                                    if (sp.matchIndex == act) colors.findMatchActive else colors.findMatch,
+                                    topLeft = Offset(textX + fS * charW, top),
+                                    size = Size((fE - fS) * charW, h)
+                                )
+                            }
+                        }
                         if (!sel.isEmpty && line >= sel.start.line && line <= sel.end.line) {
                             val cS = if (line == sel.start.line) sel.start.column else 0
                             val cE = if (line == sel.end.line) sel.end.column else lineLen
@@ -256,6 +273,21 @@ fun EditorCanvas(
                     // 视觉不变；跟随模式下 gutter 条随内容滚走，整行仍均匀高亮、左侧不留缺口。
                     if (sel.isEmpty && sel.start.line == line) {
                         drawRect(colors.gutterBackground, topLeft = Offset(hlLeft, top), size = Size(hlWidth, h))
+                    }
+                    // 查找命中底色（选区之下）：range path 与选区同式、锚固定行栅格 top。当前命中用强调色。
+                    val findSpans = findSpansForLine(line)
+                    if (findSpans.isNotEmpty()) {
+                        val act = activeFindIndex()
+                        val lineLen = engine.buffer.lineLength(line)
+                        for (sp in findSpans) {
+                            val fS = sp.startCol.coerceIn(0, lineLen)
+                            val fE = sp.endCol.coerceIn(0, lineLen)
+                            if (fE > fS) {
+                                val p = layout.getPathForRange(fS, fE)
+                                p.translate(Offset(textX, top))
+                                drawPath(p, if (sp.matchIndex == act) colors.findMatchActive else colors.findMatch)
+                            }
+                        }
                     }
                     // 选区底色纵向锚到固定行栅格 top（非 textTop）：须行行相接铺满不重叠——跟随 textTop（各行基线平移不一）会交叠。
                     if (!sel.isEmpty && line >= sel.start.line && line <= sel.end.line) {

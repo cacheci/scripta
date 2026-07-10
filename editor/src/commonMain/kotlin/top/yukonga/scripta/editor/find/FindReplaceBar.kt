@@ -1,0 +1,234 @@
+package top.yukonga.scripta.editor.find
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.defaultMinSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicText
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isShiftPressed
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import top.yukonga.scripta.editor.EditorColors
+
+/**
+ * 停靠式查找 / 替换条：嵌在编辑器根 Column 顶部、占自己的布局行——**不是** Popup 浮层。
+ * Android 上 focusable Popup 会吞掉浮层外的全部触摸（编辑区/工具栏点不动），而查找条里的输入框
+ * 又必须可获焦收 IME，两者不可兼得；停靠进主窗口布局则输入、触摸互不干扰，文本区随开合上下让位。
+ *
+ * 键：查询框 Enter=下一个、Shift+Enter=上一个、Esc=关闭回焦编辑器；替换框 Enter=替换当前。
+ */
+@Composable
+internal fun FindReplaceBar(
+    session: FindSession,
+    colors: EditorColors,
+    readOnly: Boolean,
+    onRequestEditorFocus: () -> Unit,
+) {
+    if (!session.visible) return
+    val queryFocus = remember { FocusRequester() }
+    fun closeAndRefocus() {
+        session.close()
+        onRequestEditorFocus()
+    }
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .background(colors.symbolBarBackground)
+            .padding(6.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
+                FindField(
+                    value = session.query,
+                    onValueChange = { session.query = it },
+                    placeholder = "查找",
+                    colors = colors,
+                    modifier = Modifier
+                        .focusRequester(queryFocus)
+                        .onPreviewKeyEvent { ev ->
+                            if (ev.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                            when (ev.key) {
+                                Key.Enter, Key.NumPadEnter -> {
+                                    if (ev.isShiftPressed) session.prev() else session.next(); true
+                                }
+
+                                Key.Escape -> {
+                                    closeAndRefocus(); true
+                                }
+
+                                else -> false
+                            }
+                        },
+                    onImeSearch = { session.next() },
+                )
+                BasicText(
+                    text = counterText(session),
+                    style = TextStyle(color = colors.symbolBarForeground.copy(alpha = 0.75f), fontSize = 12.sp),
+                    modifier = Modifier.widthIn(min = 44.dp),
+                )
+                ToggleChip("Aa", session.caseSensitive, colors) { session.caseSensitive = it }
+                ToggleChip("词", session.wholeWord, colors) { session.wholeWord = it }
+                ToggleChip(".*", session.useRegex, colors) { session.useRegex = it }
+                ActionChip("↑", colors) { session.prev() }
+                ActionChip("↓", colors) { session.next() }
+                ActionChip("✕", colors) { closeAndRefocus() }
+            }
+            if (session.replaceVisible && !readOnly) {
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    FindField(
+                        value = session.replacement,
+                        onValueChange = { session.replacement = it },
+                        placeholder = "替换为",
+                        colors = colors,
+                        modifier = Modifier.onPreviewKeyEvent { ev ->
+                            if (ev.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                            when (ev.key) {
+                                Key.Enter, Key.NumPadEnter -> {
+                                    session.replaceCurrent(); true
+                                }
+
+                                Key.Escape -> {
+                                    closeAndRefocus(); true
+                                }
+
+                                else -> false
+                            }
+                        },
+                        onImeSearch = { session.replaceCurrent() },
+                    )
+                    ActionChip("替换", colors) { session.replaceCurrent() }
+                    ActionChip("全部替换", colors) { session.replaceAll() }
+                }
+            }
+    }
+    // 挂载后聚焦查询框。
+    LaunchedEffect(Unit) { queryFocus.requestFocus() }
+}
+
+private fun counterText(session: FindSession): String = when {
+    session.query.isEmpty() -> ""
+    session.result.invalidPattern -> "无效正则"
+    session.result.matches.isEmpty() -> "无结果"
+    else -> {
+        val plus = if (session.result.limitHit) "+" else ""
+        "${session.activeIndex + 1}/${session.result.matches.size}$plus"
+    }
+}
+
+@Composable
+private fun FindField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    placeholder: String,
+    colors: EditorColors,
+    modifier: Modifier = Modifier,
+    onImeSearch: () -> Unit,
+) {
+    Box(
+        modifier
+            .clip(RoundedCornerShape(4.dp))
+            .background(colors.background.copy(alpha = 0.6f))
+            .padding(horizontal = 8.dp, vertical = 6.dp)
+            .width(168.dp),
+        contentAlignment = Alignment.CenterStart,
+    ) {
+        if (value.isEmpty()) {
+            BasicText(
+                text = placeholder,
+                style = TextStyle(color = colors.symbolBarForeground.copy(alpha = 0.45f), fontSize = 13.sp),
+            )
+        }
+        BasicTextField(
+            value = value,
+            onValueChange = onValueChange,
+            singleLine = true,
+            textStyle = TextStyle(color = colors.foreground, fontSize = 13.sp, fontFamily = FontFamily.Monospace),
+            cursorBrush = SolidColor(colors.cursor),
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+            keyboardActions = KeyboardActions(onSearch = { onImeSearch() }),
+            // 撑满外框：空文本的字段本身只有光标宽，点框内空白必须也能聚焦。
+            modifier = Modifier.fillMaxWidth(),
+        )
+    }
+}
+
+/** 开关小片（大小写 / 整词 / 正则）：亮起表示开。 */
+@Composable
+private fun ToggleChip(label: String, on: Boolean, colors: EditorColors, onToggle: (Boolean) -> Unit) {
+    Box(
+        Modifier
+            .clip(RoundedCornerShape(4.dp))
+            .background(if (on) colors.symbolBarPressed else Color.Transparent)
+            .pointerInput(label, on) { detectTapGestures(onTap = { onToggle(!on) }) }
+            .defaultMinSize(minWidth = 28.dp, minHeight = 28.dp)
+            .padding(horizontal = 6.dp, vertical = 5.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        BasicText(
+            text = label,
+            style = TextStyle(
+                color = colors.symbolBarForeground.copy(alpha = if (on) 1f else 0.6f),
+                fontSize = 12.sp,
+            ),
+        )
+    }
+}
+
+/** 动作小片（上一个 / 下一个 / 关闭 / 替换）：按下反馈同符号条键。 */
+@Composable
+private fun ActionChip(label: String, colors: EditorColors, onClick: () -> Unit) {
+    var pressed by remember { mutableStateOf(false) }
+    Box(
+        Modifier
+            .clip(RoundedCornerShape(4.dp))
+            .background(if (pressed) colors.symbolBarPressed else Color.Transparent)
+            .pointerInput(label) {
+                detectTapGestures(
+                    onPress = {
+                        pressed = true
+                        tryAwaitRelease()
+                        pressed = false
+                    },
+                    onTap = { onClick() },
+                )
+            }
+            .defaultMinSize(minWidth = 28.dp, minHeight = 28.dp)
+            .padding(horizontal = 6.dp, vertical = 5.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        BasicText(text = label, style = TextStyle(color = colors.symbolBarForeground, fontSize = 12.sp))
+    }
+}

@@ -3,6 +3,7 @@ package top.yukonga.scripta.editor
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.remember
+import top.yukonga.scripta.editor.find.FindSession
 
 /**
  * 编辑器文本模型的公开壳。契约是拉模型：调用方需要时用 [getText]（如保存时）取，而非每键回调。
@@ -13,6 +14,8 @@ class CodeEditorController internal constructor() {
 
     internal val engine: EditorEngine = EditorEngine()
 
+    internal val find: FindSession = FindSession(engine)
+
     /** 拉取当前文档文本。 */
     fun getText(): String = engine.getText()
 
@@ -21,6 +24,12 @@ class CodeEditorController internal constructor() {
     fun redo(): Boolean = engine.redo()
     val canUndo: Boolean get() = engine.canUndo
     val canRedo: Boolean get() = engine.canRedo
+
+    /** 打开查找 / 查找替换浮条、关闭浮条。宿主可编程驱动（工具栏按钮等）；快捷键在编辑器内部已接。 */
+    fun openFind() = find.open(withReplace = false)
+    fun openReplace() = find.open(withReplace = true)
+    fun closeFind() = find.close()
+    val isFindVisible: Boolean get() = find.visible
 
     /** 替换整篇。供 [CodeEditor] 播种初始文本。 */
     internal fun setText(value: String) {

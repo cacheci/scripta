@@ -12,6 +12,7 @@ import androidx.compose.ui.input.key.key
  *  撤销/重做的 Shift 参与命令区分，在此读取）。 */
 enum class EditorKeyCommand {
     SelectAll, Copy, Cut, Paste, Undo, Redo,
+    Find, Replace, FindNext, FindPrev,
     WordLeft, WordRight, LineStart, LineEnd, DocStart, DocEnd, PageUp, PageDown,
 }
 
@@ -25,6 +26,9 @@ internal fun resolveCtrlBased(e: KeyEvent): EditorKeyCommand? {
         Key.V -> if (ctrl) EditorKeyCommand.Paste else null
         Key.Z -> if (ctrl) (if (e.isShiftPressed) EditorKeyCommand.Redo else EditorKeyCommand.Undo) else null
         Key.Y -> if (ctrl) EditorKeyCommand.Redo else null
+        Key.F -> if (ctrl) EditorKeyCommand.Find else null
+        Key.H -> if (ctrl) EditorKeyCommand.Replace else null
+        Key.F3 -> if (e.isShiftPressed) EditorKeyCommand.FindPrev else EditorKeyCommand.FindNext
         Key.DirectionLeft -> if (ctrl) EditorKeyCommand.WordLeft else null
         Key.DirectionRight -> if (ctrl) EditorKeyCommand.WordRight else null
         Key.MoveHome -> if (ctrl) EditorKeyCommand.DocStart else EditorKeyCommand.LineStart
@@ -45,6 +49,12 @@ internal fun resolveMacBased(e: KeyEvent): EditorKeyCommand? {
         Key.X -> if (cmd) EditorKeyCommand.Cut else null
         Key.V -> if (cmd) EditorKeyCommand.Paste else null
         Key.Z -> if (cmd) (if (e.isShiftPressed) EditorKeyCommand.Redo else EditorKeyCommand.Undo) else null
+        Key.F -> when {
+            cmd && opt -> EditorKeyCommand.Replace
+            cmd -> EditorKeyCommand.Find
+            else -> null
+        }
+        Key.G -> if (cmd) (if (e.isShiftPressed) EditorKeyCommand.FindPrev else EditorKeyCommand.FindNext) else null
         Key.DirectionLeft -> when {
             opt -> EditorKeyCommand.WordLeft
             cmd -> EditorKeyCommand.LineStart

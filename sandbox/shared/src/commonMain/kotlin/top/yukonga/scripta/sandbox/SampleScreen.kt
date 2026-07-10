@@ -3,6 +3,8 @@ package top.yukonga.scripta.sandbox
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
@@ -14,6 +16,7 @@ import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.union
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.Composable
@@ -33,6 +36,7 @@ import top.yukonga.scripta.editor.EditorLanguage
 import top.yukonga.scripta.editor.LineNumberMode
 import top.yukonga.scripta.editor.rememberCodeEditorController
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun SampleScreen(modifier: Modifier = Modifier) {
     val controller = rememberCodeEditorController()
@@ -77,7 +81,7 @@ fun SampleScreen(modifier: Modifier = Modifier) {
             .fillMaxSize()
             .background(cWindow)
     ) {
-        Row(
+        FlowRow(
             Modifier
                 .fillMaxWidth()
                 .background(cBar)
@@ -87,6 +91,7 @@ fun SampleScreen(modifier: Modifier = Modifier) {
                         .only(WindowInsetsSides.Top)
                 )
                 .padding(8.dp)
+            // 演示开关越加越多，窄屏一行放不下：FlowRow 自动折行（窄屏两行、宽屏一行）。
         ) {
             BasicText(
                 text = "  打开  ",
@@ -139,6 +144,13 @@ fun SampleScreen(modifier: Modifier = Modifier) {
                 style = TextStyle(color = if (controller.canRedo) cHistory else cHistoryOff, fontSize = 13.sp),
                 modifier = Modifier.clickable { controller.redo() },
             )
+            BasicText(
+                text = "  查找  ",
+                style = TextStyle(color = cOpen, fontSize = 13.sp),
+                modifier = Modifier.clickable {
+                    if (controller.isFindVisible) controller.closeFind() else controller.openReplace()
+                },
+            )
             (errorMessage ?: openedName)?.let {
                 BasicText(
                     text = it,
@@ -146,8 +158,9 @@ fun SampleScreen(modifier: Modifier = Modifier) {
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     softWrap = false,
+                    // 可滚 Row 里不能用 weight（无界宽度下无“剩余空间”可分）；给个上限宽即可。
                     modifier = Modifier
-                        .weight(1f)
+                        .widthIn(max = 220.dp)
                         .padding(start = 4.dp),
                 )
             }

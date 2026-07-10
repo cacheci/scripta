@@ -78,6 +78,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
+import top.yukonga.scripta.editor.find.FindReplaceBar
 import top.yukonga.scripta.editor.input.EditorKeyCommand
 import top.yukonga.scripta.editor.input.editorTextInput
 import top.yukonga.scripta.editor.input.insertTypedCharacter
@@ -172,7 +173,20 @@ fun CodeEditor(
     symbols: List<EditorSymbol> = DefaultEditorSymbols,
 ) {
     val engine = controller.engine
+    val findSession = controller.find
     LaunchedEffect(initialText) { controller.setText(initialText) }
+
+    // 查找结果重算：可见性 / 查询串 / 三个开关 / 文档版本任一变化即重算（snapshotFlow 只订阅这些读取，
+    // 不牵动本可组合重组）。列表做结构比较，去掉纯粹的重复快照。
+    LaunchedEffect(engine) {
+        snapshotFlow {
+            listOf(
+                findSession.visible, findSession.query,
+                findSession.caseSensitive, findSession.wholeWord, findSession.useRegex,
+                engine.buffer.version,
+            )
+        }.collectLatest { findSession.refresh() }
+    }
 
     val density = LocalDensity.current
     val measurer = rememberTextMeasurer()
@@ -818,8 +832,16 @@ fun CodeEditor(
         .only(WindowInsetsSides.Bottom)
     val showSymbolBar = !readOnly && symbols.isNotEmpty()
 
-    // 根为 Column：文本区（weight 1f）在上、符号条常驻在下。Column 底色铺满整列（含系统栏区）。
+    // 根为 Column：查找条（开启时）停靠最上、文本区（weight 1f）居中、符号条常驻在下。Column 底色铺满整列（含系统栏区）。
     Column(modifier.background(colors.background)) {
+        // 停靠式查找/替换条：占自己的布局行，文本区随开合让位；不用 Popup——Android 上 focusable Popup
+        // 会吞掉浮层外全部触摸（编辑区/宿主工具栏点不动），而输入框又必须可获焦收 IME。
+        FindReplaceBar(
+            session = findSession,
+            colors = colors,
+            readOnly = readOnly,
+            onRequestEditorFocus = { focusRequester.requestFocus() },
+        )
         Box(
             Modifier
                 .fillMaxWidth()
@@ -974,6 +996,12 @@ fun CodeEditor(
                             EditorKeyCommand.Undo -> clipboardActions.perform(EditorContextAction.Undo)
                             EditorKeyCommand.Redo -> clipboardActions.perform(EditorContextAction.Redo)
 
+                            // 查找 / 替换：打开浮条（焦点移交查询框）；F3 / Cmd+G 系在浮条开着时步进导航。
+                            EditorKeyCommand.Find -> findSession.open(withReplace = false)
+                            EditorKeyCommand.Replace -> findSession.open(withReplace = !readOnlyLive.value)
+                            EditorKeyCommand.FindNext -> if (findSession.visible) findSession.next()
+                            EditorKeyCommand.FindPrev -> if (findSession.visible) findSession.prev()
+
                             EditorKeyCommand.WordLeft -> engine.moveCaretByWord(-1, shift)
                             EditorKeyCommand.WordRight -> engine.moveCaretByWord(1, shift)
                             EditorKeyCommand.LineStart -> engine.moveCaretToLineStart(shift)
@@ -989,6 +1017,11 @@ fun CodeEditor(
                     // composing（预编辑）进行中，方向/回车/退格等键由输入法消费、不回落到此处，故这些处理器
                     // 无需按 composing 设闸；可打印字符路径（insertTypedCharacter）则显式设了 composing 闸。
                     when (ev.key) {
+                        // 查找浮条开着时 Esc 关闭（浮条内 Esc 由其字段自行处理；这里接住焦点在编辑器时的 Esc）。
+                        Key.Escape -> if (findSession.visible) {
+                            findSession.close(); true
+                        } else false
+
                         Key.DirectionLeft -> {
                             engine.moveCaretHorizontally(-1, shift); true
                         }
@@ -1383,6 +1416,9 @@ fun CodeEditor(
                 gridRefBaseline = gridRefBaseline,
                 gridRefCursorTop = gridRefCursor.top,
                 gridRefCursorBottom = gridRefCursor.bottom,
+                // 查找命中高亮（draw 阶段读 session 的行索引表与当前命中下标，重算即重绘、不重组）。
+                findSpansForLine = findSession::spansForLine,
+                activeFindIndex = { findSession.activeIndex },
                 // 缩放预览的运行态仿射（draw 阶段读）：previewScale 连续缩放系数、previewTx/previewTy 两轴平移（屏幕 px）。手势逐帧按
                 // 「绕当前双指中点缩放 + 中点位移平移」增量累积 → 四向自由跟手；换行下 previewTx 恒 0（正文/gutter 钉左）。恒 (1,0,0) 逐像素等价原状。
                 previewScale = { previewScale },
