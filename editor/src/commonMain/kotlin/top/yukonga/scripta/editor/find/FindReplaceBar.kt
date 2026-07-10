@@ -35,9 +35,11 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import top.yukonga.scripta.editor.EditorColors
@@ -160,6 +162,14 @@ private fun FindField(
     modifier: Modifier = Modifier,
     onImeSearch: () -> Unit,
 ) {
+    // 选区归字段内部管，文本与外部 String 同步。挂载初值全选：查找条关闭重开（字段重挂载）时
+    // 上次的查询词处于全选态——直接输入即覆盖、直接 Enter 即复用。
+    var fieldValue by remember { mutableStateOf(TextFieldValue(value, TextRange(0, value.length))) }
+    if (fieldValue.text != value) {
+        // 外部改写文本（打开时按选区预填等）：同步并全选，语义同重开。用户键入不走这里
+        //（onValueChange 已把外部值改成一致）。
+        fieldValue = TextFieldValue(value, TextRange(0, value.length))
+    }
     Box(
         modifier
             // 宽度交给调用方（Row 内 weight 弹性分配），只兜一个可点/可读的下限。
@@ -176,8 +186,11 @@ private fun FindField(
             )
         }
         BasicTextField(
-            value = value,
-            onValueChange = onValueChange,
+            value = fieldValue,
+            onValueChange = {
+                fieldValue = it
+                if (it.text != value) onValueChange(it.text)
+            },
             singleLine = true,
             textStyle = TextStyle(color = colors.foreground, fontSize = 13.sp, fontFamily = FontFamily.Monospace),
             cursorBrush = SolidColor(colors.cursor),
