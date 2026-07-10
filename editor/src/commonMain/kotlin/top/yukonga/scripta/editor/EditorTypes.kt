@@ -2,8 +2,9 @@ package top.yukonga.scripta.editor
 
 import androidx.compose.runtime.Immutable
 import androidx.compose.ui.graphics.Color
+import top.yukonga.scripta.editor.highlight.SyntaxColors
 
-/** The language the editor is configured for. Syntax highlighting is not built yet, so this is currently inert — PlainText and Yaml render identically. */
+/** The language the editor is configured for: selects the built-in highlighter plugin (PlainText = none). A custom [top.yukonga.scripta.editor.highlight.SyntaxHighlighter] passed to [CodeEditor] takes precedence. */
 enum class EditorLanguage {
     PlainText,
     Yaml,
@@ -42,6 +43,8 @@ data class EditorColors(
     /** 查找命中的底色 / 当前命中的强调底色（画在选区之下）。带默认值，不破坏既有构造。 */
     val findMatch: Color = Color(0x4DFFC107),
     val findMatchActive: Color = Color(0x80FF6F00),
+    /** 语法高亮配色（token 类型 → 颜色，逐槽位可自定义）。带默认值，不破坏既有构造。 */
+    val syntax: SyntaxColors = SyntaxColors.Dark,
 ) {
     companion object {
         /** A neutral dark default so the scaffold renders visibly before a theme is wired up. */
@@ -67,6 +70,7 @@ data class EditorColors(
             symbolBarBackground = Color(0xFFECECEC),
             symbolBarForeground = Color(0xFF3C3C3C),
             symbolBarPressed = Color(0x14000000),
+            syntax = SyntaxColors.Light,
         )
     }
 }

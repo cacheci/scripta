@@ -116,6 +116,7 @@ class EditorEngine(initialText: String = "") {
         contentGeneration++ // 换文档：视图层据此重置横向范围等跨文档累积量
         history.clear() // 整篇替换 = 换文档，旧文档的编辑历史不再适用
         syncHistory()
+        markDirtyLine(0)
         maybeNotify()
     }
 
@@ -140,6 +141,7 @@ class EditorEngine(initialText: String = "") {
         for (e in step.edits) {
             val start = buffer.positionAt(e.offset)
             val end = buffer.positionAt(e.offset + e.removed.length)
+            markDirtyLine(start.line)
             buffer.replace(TextRange(start, end), e.inserted)
         }
         anchor = buffer.positionAt(step.selection.anchor)
@@ -166,6 +168,7 @@ class EditorEngine(initialText: String = "") {
         val start = buffer.clamp(r.start)
         val startOff = buffer.offsetAt(start)
         val removed = buffer.textInRange(r)
+        markDirtyLine(start.line)
         val newCaret = buffer.replace(r, text)
         val inserted = buffer.textInRange(TextRange(start, newCaret))
         return TextEdit(startOff, removed, inserted) to newCaret
@@ -174,6 +177,23 @@ class EditorEngine(initialText: String = "") {
     /** 单码点判定（含代理对）：单字符键入的合并粒度。 */
     private fun isSingleCodePoint(s: String): Boolean =
         s.length == 1 || (s.length == 2 && s[0].isHighSurrogate() && s[1].isLowSurrogate())
+
+    // 自上次 consumeDirtyLine 以来编辑触及的最小行号（下界；初始 0 = 整篇待处理）。
+    private var dirtyFromLine = 0
+
+    /**
+     * 取走「最早受编辑影响的行号」并复位（下界语义；无编辑时返回 Int.MAX_VALUE）。高亮的行状态链
+     * 据此只从该行起重算——引擎不暴露完整编辑 delta，这个单调最小值已足够正确失效。
+     */
+    internal fun consumeDirtyLine(): Int {
+        val v = dirtyFromLine
+        dirtyFromLine = Int.MAX_VALUE
+        return v
+    }
+
+    private fun markDirtyLine(line: Int) {
+        if (line < dirtyFromLine) dirtyFromLine = line
+    }
 
     /**
      * 把 [ranges]（扁平 offset 区间 (start, end)，升序且互不重叠）全部替换为 [replacement]，

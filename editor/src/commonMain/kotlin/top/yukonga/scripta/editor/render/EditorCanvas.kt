@@ -308,8 +308,8 @@ fun EditorCanvas(
                             )
                         }
                     }
-                    // 正文（含换行后的多视觉行）
-                    drawText(layout, color = colors.foreground, topLeft = Offset(textX, textTop))
+                    // 正文（含换行后的多视觉行）。不传 color：layout 自带基础色 + 语法高亮 span 色。
+                    drawText(layout, topLeft = Offset(textX, textTop))
                     // 行号（基线对齐到正文基线）；命中缓存则跳过重测（LRU 自动淘汰，无需手动清空）
                     drawLineNumber(line, top)
                 }
@@ -756,7 +756,8 @@ fun MagnifierOverlay(
                                                 )
                                             }
                                         }
-                                        drawText(layout, color = colors.foreground, topLeft = Offset(textX, textTop))
+                                        // 不传 color：镜内正文沿用 layout 自带的语法高亮色，与主画布一致。
+                                        drawText(layout, topLeft = Offset(textX, textTop))
                                     }
                                 }
                                 ln++

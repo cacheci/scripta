@@ -79,6 +79,11 @@ import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import top.yukonga.scripta.editor.find.FindReplaceBar
+import top.yukonga.scripta.editor.highlight.HighlightCache
+import top.yukonga.scripta.editor.highlight.HighlightSpan
+import top.yukonga.scripta.editor.highlight.SyntaxHighlighter
+import top.yukonga.scripta.editor.highlight.YamlHighlighter
+import top.yukonga.scripta.editor.highlight.highlightedText
 import top.yukonga.scripta.editor.input.EditorKeyCommand
 import top.yukonga.scripta.editor.input.editorTextInput
 import top.yukonga.scripta.editor.input.insertTypedCharacter
@@ -134,9 +139,15 @@ private const val BOTTOM_SCROLL_PAD_FRACTION = 0.2f
 /**
  * layoutFor 逐行缓存条目。[validatedVersion] 记「上次确认与文档一致时的 buffer.version」：命中且版本相等即
  * 说明此后无任何编辑、本行文本必与 [content] 相同，可零分配零比较直接复用 [layout]（稳态滚动/闪烁/拖选帧全
- * 走这里）；版本变了才回退按 [content] 比对——编辑他行不改本行文本，仍命中并刷新版本戳，唯内容不符才重测。
+ * 走这里）；版本变了才回退按 [content] + [spans] 比对——编辑他行不改本行文本，但可能经跨行状态（块标量）
+ * 改本行着色，故着色段也参与校验；两者都相符才复用并刷新版本戳。
  */
-private class CachedLayout(var validatedVersion: Int, val content: String, val layout: TextLayoutResult)
+private class CachedLayout(
+    var validatedVersion: Int,
+    val content: String,
+    val spans: List<HighlightSpan>,
+    val layout: TextLayoutResult,
+)
 
 /**
  * isNarrowLine 逐行缓存条目（与 [CachedLayout] 同法失效，但只存「长度+hash 指纹」而非整行内容——网格路专治
@@ -171,6 +182,8 @@ fun CodeEditor(
     softWrap: Boolean = false,
     lineNumberMode: LineNumberMode = LineNumberMode.PinnedToScreen,
     symbols: List<EditorSymbol> = DefaultEditorSymbols,
+    /** 语法高亮插件；null 时按 [language] 选内置插件（PlainText = 不高亮）。自定义插件优先于内置。 */
+    highlighter: SyntaxHighlighter? = null,
 ) {
     val engine = controller.engine
     val findSession = controller.find
@@ -295,6 +308,20 @@ fun CodeEditor(
     engine.buffer.version
     val lineCount = engine.buffer.lineCount
 
+    // 语法高亮：显式插件优先，否则按 language 选内置。行状态链缓存随插件/引擎重建。
+    val resolvedHighlighter = highlighter ?: when (language) {
+        EditorLanguage.Yaml -> remember { YamlHighlighter() }
+        EditorLanguage.PlainText -> null
+    }
+    val highlightCache = remember(resolvedHighlighter, engine) { resolvedHighlighter?.let { HighlightCache(it) } }
+    // 编辑后的状态链失效必须在**本次组合**里完成——layoutFor 马上要用；LaunchedEffect 晚一帧会让本帧
+    // 用旧状态测行。与 widestSeen 同法：非 state、写读均在组合内，按 version 去重。
+    val highlightSeenVersion = remember(highlightCache) { intArrayOf(-1) }
+    if (highlightCache != null && highlightSeenVersion[0] != engine.buffer.version) {
+        highlightSeenVersion[0] = engine.buffer.version
+        highlightCache.invalidateFrom(engine.consumeDirtyLine())
+    }
+
     val gutterDigits = EditorGeometry.gutterDigits(lineCount)
     val gutterWidthPx = remember(gutterDigits, numberStyle) {
         measurer.measure("0".repeat(gutterDigits), numberStyle).size.width + padXPx * 2
@@ -320,41 +347,45 @@ fun CodeEditor(
     val rowIndexSize = if (softWrap) lineCount else 1
     val rowIndex = remember(softWrap, widthBucket, rowIndexSize) { VisualRowIndex(rowIndexSize) }
 
-    // 逐行 layout 缓存：只在宽度/模式/字号变化时整表失效，不再以 version 失效——否则每敲一个字符整表丢弃、
-    // 可见行全部重测。失效改由下方按行内容比对精确处理（内容变了才重测；插入/删除行的下标平移也会因内容
-    // 不符自然重测）。有界 LRU：超上限淘汰最久未用，而非整表 clear() 把可见行一并丢弃。
-    val layoutCache = remember(softWrap, widthBucket, fontSizeSp) { LruCache<Int, CachedLayout>(4096) }
+    // 逐行 layout 缓存：只在宽度/模式/字号/配色/插件变化时整表失效，不再以 version 失效——否则每敲一个字符
+    // 整表丢弃、可见行全部重测。失效改由下方按行「内容 + 着色段」比对精确处理（本行被编辑、或上游块标量
+    // 状态改变本行着色才重测；插入/删除行的下标平移也会因内容不符自然重测）。有界 LRU：超上限淘汰最久未用。
+    val layoutCache = remember(softWrap, widthBucket, fontSizeSp, colors, resolvedHighlighter) {
+        LruCache<Int, CachedLayout>(4096)
+    }
     fun layoutFor(line: Int): TextLayoutResult? {
         if (line < 0 || line >= engine.buffer.lineCount) return null
         if (isGridLine(line)) return null // 网格行不整行测量：绘制走可见列切片（EditorCanvas），几何走等宽算术
         val version = engine.buffer.version
         val cached = layoutCache[line]
-        // 快路：version 未变说明自上次校验以来无编辑 → 行文本必然未变，跳过 lineText 物化 + O(len) 比较，零分配。
+        // 快路：version 未变说明自上次校验以来无编辑 → 行文本与着色必然未变，跳过物化与 O(len) 比较，零分配。
         if (cached != null && cached.validatedVersion == version) {
             // 命中也回填视觉行数：rowIndex 仍以 lineCount 为 key、行数变化时会重建为 1 行估算，而命中
             // 分支不经下面的 setRows，需在此补上，否则软换行的行高/定位会退回估算值。
             if (softWrap) rowIndex.setRows(line, cached.layout.lineCount)
             return cached.layout
         }
-        // version 变了（发生过编辑）：按内容精确校验。lineText 至多取一次。编辑他行不改本行文本 → 内容仍相符，
-        // 刷新版本戳复用 layout；内容不符（本行被编辑，或插入/删除行的下标平移到别的行）才真正重测。
+        // version 变了（发生过编辑）：按「内容 + 着色段」精确校验。lineText 至多取一次；着色段经状态链缓存
+        // 取（分词便宜）。都相符 → 刷新版本戳复用 layout；否则重测。
         val content = engine.buffer.lineText(line)
-        if (cached != null && cached.content == content) {
+        val spans = highlightCache?.spansForLine(line) { engine.buffer.lineText(it) } ?: emptyList()
+        if (cached != null && cached.content == content && cached.spans == spans) {
             cached.validatedVersion = version
             if (softWrap) rowIndex.setRows(line, cached.layout.lineCount)
             return cached.layout
         }
+        val annotated = highlightedText(content, spans, colors.syntax)
         val measured = if (softWrap) {
             measurer.measure(
-                content,
+                annotated,
                 textStyle,
                 softWrap = true,
                 constraints = Constraints(maxWidth = textAreaWidthPx.toInt().coerceAtLeast(1))
             )
         } else {
-            measurer.measure(content, textStyle, softWrap = false)
+            measurer.measure(annotated, textStyle, softWrap = false)
         }
-        layoutCache[line] = CachedLayout(version, content, measured)
+        layoutCache[line] = CachedLayout(version, content, spans, measured)
         if (softWrap) rowIndex.setRows(line, measured.lineCount)
         return measured
     }

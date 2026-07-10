@@ -1,0 +1,27 @@
+package top.yukonga.scripta.editor.highlight
+
+/** 语义 token 类型：插件产出「类型」、主题把类型映射为颜色——换主题不换插件、换插件不换主题。 */
+enum class TokenType { Comment, Key, String, Number, Boolean, Null, Keyword, Punctuation, Anchor, Tag, Directive }
+
+/** 行内一段着色：[start, end) 列区间（UTF-16 char 列）+ 语义类型。区间按 start 升序、互不重叠。 */
+data class HighlightSpan(val start: Int, val end: Int, val type: TokenType)
+
+/**
+ * 行进入 / 退出状态：跨行结构（块标量、多行字符串等）经它在行间传递。实现须为不可变值类型
+ * （结构相等）——缓存靠「内容 + 进入状态相等」判断可否复用上次分词结果。
+ */
+interface LineState
+
+/** 一行的分词结果：着色段 + 传给下一行的退出状态（null = 无跨行结构）。 */
+class LineHighlight(val spans: List<HighlightSpan>, val exitState: LineState?)
+
+/**
+ * 语法高亮插件接口：按行增量分词。实现只依赖「本行文本 + 上一行退出状态」，其余（状态链推进、
+ * 缓存、失效、渲染）由编辑器承担——插件保持纯函数即可跨行正确、可单测。
+ */
+interface SyntaxHighlighter {
+    /** 文档首行的进入状态；通常 null（无跨行结构）。 */
+    val initialState: LineState? get() = null
+
+    fun highlightLine(text: String, entryState: LineState?): LineHighlight
+}
