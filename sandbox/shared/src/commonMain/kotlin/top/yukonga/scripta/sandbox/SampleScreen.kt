@@ -210,7 +210,7 @@ fun SampleScreen(modifier: Modifier = Modifier) {
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     softWrap = false,
-                    // 可滚 Row 里不能用 weight（无界宽度下无“剩余空间”可分）；给个上限宽即可。
+                    // FlowRow 的折行布局没有「剩余空间」语义可分（weight 不适用）；给个上限宽即可。
                     modifier = Modifier
                         .widthIn(max = 220.dp)
                         .padding(start = 4.dp),
