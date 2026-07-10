@@ -14,6 +14,7 @@ import androidx.compose.foundation.gestures.scrollable2D
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.WindowInsets
@@ -205,6 +206,10 @@ fun CodeEditor(
     val measurer = rememberTextMeasurer()
     val focusRequester = remember { FocusRequester() }
     val interaction = remember { MutableInteractionSource() }
+    // 编辑器（focusable 节点）是否持有焦点：查找框等部件夺焦时为 false。光标/光标手柄只在持焦时绘制——
+    // 焦点唯一由 Compose 保证，这里只是让绘制尊重它（否则查找框和正文会同时闪两个光标）。
+    // **仅在 draw 阶段的 lambda 里读**：焦点切换只重绘光标层，不牵动本可组合重组。
+    val editorFocused = interaction.collectIsFocusedAsState()
     // 新 Clipboard 的收发是 suspend，需一个组合级作用域来跑复制/剪切/粘贴。
     val clipboard = LocalClipboard.current
     val clipboardScope = rememberCoroutineScope()
@@ -1438,7 +1443,8 @@ fun CodeEditor(
                 firstVisibleLine = { extraTopPx -> (lineAtPx(scrollY.coerceIn(0f, maxScrollY) + extraTopPx) - 3).coerceAtLeast(0) },
                 lineTopPx = ::lineTopPx,
                 refBaselinePx = refBaselinePx,
-                caretHandleVisible = { caretHandleVisible && !readOnly && !lastInteractionWasMouse },
+                // 光标手柄跟随光标线的可见性：编辑器失焦（如查找框输入中）光标不画，手柄也不悬空。
+                caretHandleVisible = { caretHandleVisible && !readOnly && !lastInteractionWasMouse && editorFocused.value },
                 selectionHandlesVisible = { !lastInteractionWasMouse },
                 handleRadiusPx = handleRadiusPx,
                 layoutFor = ::layoutFor,
@@ -1461,7 +1467,8 @@ fun CodeEditor(
             CursorOverlay(
                 engine = engine,
                 colors = colors,
-                caretVisible = { !readOnly && blink },
+                // 持焦才画：查找框等部件夺焦时正文不再闪光标（同一时刻只有焦点所在处有插入光标）。
+                caretVisible = { !readOnly && blink && editorFocused.value },
                 scrollX = { scrollX.coerceIn(0f, maxScrollX) },
                 scrollY = { scrollY.coerceIn(0f, maxScrollY) },
                 lineTopPx = ::lineTopPx,
@@ -1484,7 +1491,7 @@ fun CodeEditor(
                 active = { handleDragActive },
                 // 连续手指位置（逐帧写）：光标手柄用 caretDragPos、选区端点用 selectionDragPos；胶囊据其 x 平滑跟手不跳。
                 dragPos = { caretDragPos ?: selectionDragPos },
-                caretVisible = { !readOnly && blink }, // 镜内光标随主编辑器同一 blink 闪烁
+                caretVisible = { !readOnly && blink && editorFocused.value }, // 镜内光标随主编辑器同一 blink 闪烁、同一焦点门
                 viewportWidth = { viewportWidth },     // 水平钳制到视口
                 contentTopInWindow = { contentTopInWindow }, // 允许胶囊上浮到窗口顶附近
                 scrollX = { scrollX.coerceIn(0f, maxScrollX) },
