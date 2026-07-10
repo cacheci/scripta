@@ -17,6 +17,21 @@ enum class TokenType {
 data class HighlightSpan(val start: Int, val end: Int, val type: TokenType)
 
 /**
+ * 裁剪着色段到列窗口 `[from, until)` 并平移为窗口内坐标（网格长行只测可见列切片时用）；
+ * 与窗口无交集的段丢弃。入参须满足 [HighlightSpan] 的升序不重叠契约，输出保持同契约。
+ */
+fun clipSpansToWindow(spans: List<HighlightSpan>, from: Int, until: Int): List<HighlightSpan> {
+    if (spans.isEmpty() || until <= from) return emptyList()
+    val out = ArrayList<HighlightSpan>()
+    for (s in spans) {
+        if (s.end <= from) continue
+        if (s.start >= until) break // 升序：后续段只会更靠右
+        out.add(HighlightSpan(maxOf(s.start, from) - from, minOf(s.end, until) - from, s.type))
+    }
+    return out
+}
+
+/**
  * 行进入 / 退出状态：跨行结构（块标量、多行字符串等）经它在行间传递。实现须为不可变值类型
  * （结构相等）——缓存靠「内容 + 进入状态相等」判断可否复用上次分词结果。
  */

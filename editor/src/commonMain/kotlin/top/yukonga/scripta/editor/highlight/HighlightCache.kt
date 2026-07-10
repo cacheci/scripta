@@ -10,7 +10,15 @@ package top.yukonga.scripta.editor.highlight
  * 旧存值相等（[LineState] 契约要求结构相等），说明下游整段旧链依然成立，水位线直接跳回尾链末端。
  * 于是在超长文件顶部打字（未改变跨行状态）后跳到文件尾是 O(脏行数) 而非 O(文件行数)。
  */
-class HighlightCache(private val highlighter: SyntaxHighlighter) {
+class HighlightCache(
+    private val highlighter: SyntaxHighlighter,
+    /**
+     * 单行分词上限（UTF-16 字符）：更长的行不分词——空着色段、状态穿透（当作对跨行结构无贡献）。
+     * 巨行（几 MB 的 minified 单行）每次编辑都要 O(行长) 重扫，必须有放弃阈值兜底；
+     * 默认值与主流编辑器同级（VS Code maxTokenizationLineLength = 20000）。
+     */
+    private val maxLexedLineLength: Int = 20_000,
+) {
 
     private val exitStates = ArrayList<LineState?>()
     private var valid = 0 // exitStates[0, valid) 可信
@@ -51,17 +59,25 @@ class HighlightCache(private val highlighter: SyntaxHighlighter) {
     fun spansForLine(line: Int, getLine: (Int) -> String): List<HighlightSpan> {
         while (valid < line) advance(getLine)
         if (line == valid) return advance(getLine).spans
-        return highlighter.highlightLine(getLine(line), entryFor(line)).spans
+        return lexLine(line, getLine).spans
     }
 
     private fun entryFor(line: Int): LineState? =
         if (line == 0) highlighter.initialState else exitStates[line - 1]
 
+    /** 分词一行；超过 [maxLexedLineLength] 的行不进插件：空 spans、进入状态原样穿透。 */
+    private fun lexLine(line: Int, getLine: (Int) -> String): LineHighlight {
+        val text = getLine(line)
+        val entry = entryFor(line)
+        if (text.length > maxLexedLineLength) return LineHighlight(emptyList(), entry)
+        return highlighter.highlightLine(text, entry)
+    }
+
     private fun advance(getLine: (Int) -> String): LineHighlight {
         val line = valid
         val comparable = line >= tailFloor && line < tailEnd
         val old = if (comparable) exitStates[line] else null
-        val h = highlighter.highlightLine(getLine(line), entryFor(line))
+        val h = lexLine(line, getLine)
         setExit(line, h.exitState)
         valid = if (comparable && h.exitState == old) tailEnd else line + 1
         return h

@@ -119,15 +119,27 @@ data class SyntaxColors(
     }
 }
 
-/** 把着色段落到 [AnnotatedString]（越界段钳到内容内）；无段时不建 builder。 */
-fun highlightedText(content: String, spans: List<HighlightSpan>, colors: SyntaxColors): AnnotatedString {
+/**
+ * 把着色段落到 [AnnotatedString]（越界段钳到内容内）；无段时不建 builder。
+ * [colorOnly]：只落颜色、丢弃粗细/斜体/装饰线——网格长行的等宽算术假设基础字宽，
+ * 颜色不改度量而字重可能改，故其切片测量走此模式。
+ */
+fun highlightedText(
+    content: String,
+    spans: List<HighlightSpan>,
+    colors: SyntaxColors,
+    colorOnly: Boolean = false,
+): AnnotatedString {
     if (spans.isEmpty()) return AnnotatedString(content)
     return buildAnnotatedString {
         append(content)
         for (s in spans) {
             val st = s.start.coerceIn(0, content.length)
             val en = s.end.coerceIn(st, content.length)
-            if (en > st) addStyle(colors.styleFor(s.type).toSpanStyle(), st, en)
+            if (en > st) {
+                val style = colors.styleFor(s.type)
+                addStyle(if (colorOnly) SpanStyle(color = style.color) else style.toSpanStyle(), st, en)
+            }
         }
     }
 }

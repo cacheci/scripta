@@ -44,6 +44,10 @@ import top.yukonga.scripta.editor.EditorEngine
 import top.yukonga.scripta.editor.LineNumberMode
 import top.yukonga.scripta.editor.LruCache
 import top.yukonga.scripta.editor.find.FindSpan
+import top.yukonga.scripta.editor.highlight.HighlightCache
+import top.yukonga.scripta.editor.highlight.SyntaxColors
+import top.yukonga.scripta.editor.highlight.clipSpansToWindow
+import top.yukonga.scripta.editor.highlight.highlightedText
 import top.yukonga.scripta.editor.text.TextPosition
 import top.yukonga.scripta.editor.text.TextRange
 import kotlin.math.PI
@@ -55,6 +59,27 @@ import kotlin.math.sin
 
 /** 网格行可见列切片缓存的键：行 + 量化后的列窗口 [start,end) + 文档版本（编辑即失效）。 */
 private data class GridSliceKey(val line: Int, val start: Int, val end: Int, val version: Int)
+
+/**
+ * 网格切片测量（主画布与放大镜共用）：可见列窗口切片 + 裁剪到窗口的着色段。colorOnly——网格等宽
+ * 算术假设基础字宽，字重会改度量、颜色不会。超过分词上限的行 spans 为空，自然退回纯色。
+ */
+private fun measureGridSlice(
+    engine: EditorEngine,
+    textMeasurer: TextMeasurer,
+    textStyle: TextStyle,
+    syntax: SyntaxColors,
+    highlightCache: HighlightCache?,
+    line: Int,
+    from: Int,
+    until: Int,
+): TextLayoutResult {
+    val slice = engine.buffer.textInRange(TextRange(TextPosition(line, from), TextPosition(line, until)))
+    val spans = highlightCache?.spansForLine(line) { engine.buffer.lineText(it) } ?: emptyList()
+    val clipped = clipSpansToWindow(spans, from, until)
+    return if (clipped.isEmpty()) textMeasurer.measure(slice, textStyle, softWrap = false)
+    else textMeasurer.measure(highlightedText(slice, clipped, syntax, colorOnly = true), textStyle, softWrap = false)
+}
 
 /** 网格行切片列窗口量化粒度：窗口左右对齐到 32 列倍数，横滚每 32 列才换一次 key、其余帧命中缓存。 */
 private const val GRID_SLICE_QUANTUM = 32
@@ -130,6 +155,9 @@ fun EditorCanvas(
     gridRefCursorBottom: Float,
     findSpansForLine: (Int) -> List<FindSpan> = { emptyList() },
     activeFindIndex: () -> Int = { -1 },
+    // 语法高亮状态链（null = 无高亮）：网格长行的可见列切片据此取着色段。draw 恒在同帧组合之后，
+    // 组合里的 ensureHighlightFresh 已截断状态链，这里直接取即可。
+    highlightCache: HighlightCache? = null,
     previewScale: () -> Float = { 1f },
     previewTx: () -> Float = { 0f },
     previewTy: () -> Float = { 0f },
@@ -141,8 +169,9 @@ fun EditorCanvas(
     val numberLayoutCache = remember(numberStyle) { LruCache<Int, TextLayoutResult>(4096) }
     // 网格行可见列切片缓存：横滚/纵向 fling 时避免每帧 textInRange 新建切片 String + measure 重 shaping。
     // key 含文档版本（编辑即失效），列窗口量化到 32 列 → 窗口内滚动/闪烁/拖选帧全命中，横滚每 32 列才重测一次。
-    // textStyle 变化（字号/配色）整表失效。有界 LRU：网格行同屏通常个位数，256 足够。
-    val gridSliceCache = remember(textStyle) { LruCache<GridSliceKey, TextLayoutResult>(256) }
+    // 整表失效 key：textStyle（字号/前景）之外还要 colors.syntax 与 highlightCache——切片现在带语法着色，
+    // 仅语法色变化时 textStyle 内容相同（remember 按 equals 比），换插件时 version 也不动，都得单列。
+    val gridSliceCache = remember(textStyle, colors.syntax, highlightCache) { LruCache<GridSliceKey, TextLayoutResult>(256) }
     // 泪滴手柄路径按 kind 预建缓存（尖端在原点、body 沿方向悬挂）：只依赖 handleRadiusPx（固定 dp），绘制时每帧只 translate
     // 到光标底 + drawPath，免去逐帧新建 Path + acos/atan2 + arcTo 弧线细分（drawHandle 每帧对每个可见手柄都画一次）。
     val diag = 0.70710677f
@@ -251,10 +280,10 @@ fun EditorCanvas(
                             val qStart = (cols.first / q) * q
                             val qEnd = (((cols.last + q - 1) / q) * q).coerceAtMost(lineLen)
                             val sliceLayout = gridSliceCache.getOrPut(GridSliceKey(line, qStart, qEnd, bufVersion)) {
-                                val slice = engine.buffer.textInRange(TextRange(TextPosition(line, qStart), TextPosition(line, qEnd)))
-                                textMeasurer.measure(slice, textStyle, softWrap = false)
+                                measureGridSlice(engine, textMeasurer, textStyle, colors.syntax, highlightCache, line, qStart, qEnd)
                             }
-                            drawText(sliceLayout, color = colors.foreground, topLeft = Offset(textX + qStart * charW, textTop))
+                            // 不传 color：切片自带语法 span 色，未覆盖处用 textStyle 的前景色（同普通行画法）。
+                            drawText(sliceLayout, topLeft = Offset(textX + qStart * charW, textTop))
                         }
                         drawLineNumber(line, top)
                     }
@@ -547,6 +576,8 @@ fun MagnifierOverlay(
     gridRefCursorBottom: Float,
     gutterWidthPx: Float,
     padXPx: Float,
+    // 语法高亮状态链（null = 无高亮）：网格长行切片取着色段，与主画布同源。
+    highlightCache: HighlightCache? = null,
 ) {
     // show/hide 快速淡入淡出：alpha 随 active 起落，Popup 内容 graphicsLayer 应用整层透明度。淡入偏快（抓取即现）、淡出稍慢
     // （消失最显突兀，给足过渡）；都仍是「快速」量级，时长可再调。
@@ -730,9 +761,9 @@ fun MagnifierOverlay(
                                     val c0 = (g.col - 24).coerceIn(0, len)
                                     val c1 = (g.col + 24).coerceIn(0, len)
                                     if (c1 > c0) {
-                                        val slice = engine.buffer.textInRange(TextRange(TextPosition(ln, c0), TextPosition(ln, c1)))
-                                        val sl = textMeasurer.measure(slice, textStyle, softWrap = false)
-                                        drawText(sl, color = colors.foreground, topLeft = Offset(textX + c0 * charW, textTop))
+                                        // 与主画布同源：切片带语法着色（放大镜逐帧重测，单行 ≤ 上限的重扫是微秒级）。
+                                        val sl = measureGridSlice(engine, textMeasurer, textStyle, colors.syntax, highlightCache, ln, c0, c1)
+                                        drawText(sl, topLeft = Offset(textX + c0 * charW, textTop))
                                     }
                                 } else {
                                     val layout = layoutFor(ln)

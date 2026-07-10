@@ -1469,6 +1469,7 @@ fun CodeEditor(
                 // 查找命中高亮（draw 阶段读 session 的行索引表与当前命中下标，重算即重绘、不重组）。
                 findSpansForLine = findSession::spansForLine,
                 activeFindIndex = { findSession.activeIndex },
+                highlightCache = highlightCache,
                 // 缩放预览的运行态仿射（draw 阶段读）：previewScale 连续缩放系数、previewTx/previewTy 两轴平移（屏幕 px）。手势逐帧按
                 // 「绕当前双指中点缩放 + 中点位移平移」增量累积 → 四向自由跟手；换行下 previewTx 恒 0（正文/gutter 钉左）。恒 (1,0,0) 逐像素等价原状。
                 previewScale = { previewScale },
@@ -1523,6 +1524,7 @@ fun CodeEditor(
                 gridRefCursorBottom = gridRefCursor.bottom,
                 gutterWidthPx = gutterWidthPx,
                 padXPx = padXPx,
+                highlightCache = highlightCache,
             )
             // 触屏文本操作悬浮条（选区上方浮条 / 点光标粘贴气泡）。show 门：已触发 && 非鼠标 && 未在拖手柄/框选；
             // 宿主在本 Box 内，Popup 锚定本 Box → posRect 的编辑器局部坐标即定位基准。
