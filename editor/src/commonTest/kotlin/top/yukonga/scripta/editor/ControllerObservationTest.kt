@@ -10,11 +10,7 @@ import kotlin.test.assertTrue
 /** Controller 观测出口（B1+B2）：selection/caret 读取、documentVersion/isModified/markSaved、isComposing。 */
 class ControllerObservationTest {
 
-    private fun controller(text: String): CodeEditorController {
-        val c = CodeEditorController()
-        c.setText(text)
-        return c
-    }
+    private fun controller(text: String): CodeEditorController = CodeEditorController(text)
 
     // --- B2 selection / caret ---
 
@@ -62,7 +58,6 @@ class ControllerObservationTest {
     @Test
     fun editSetsModifiedAndMarkSavedClearsIt() {
         val c = controller("ab")
-        c.markSaved(c.documentVersion) // 播种在 B5 前经 internal setText，这里显式建立基准
         c.engine.insert("X")
         assertTrue(c.isModified)
         c.markSaved(c.documentVersion)

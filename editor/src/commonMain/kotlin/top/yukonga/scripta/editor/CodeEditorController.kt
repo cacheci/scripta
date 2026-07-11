@@ -5,6 +5,8 @@ import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.Saver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import top.yukonga.scripta.editor.find.FindSession
 import top.yukonga.scripta.editor.text.TextPosition
@@ -22,9 +24,9 @@ import top.yukonga.scripta.editor.text.TextRange
  * `val v = documentVersion; val text = getText()`，切 IO 线程写盘，回主线程 `markSaved(v)`。
  */
 @Stable
-class CodeEditorController internal constructor() {
+class CodeEditorController internal constructor(initialText: String = "") {
 
-    internal val engine: EditorEngine = EditorEngine()
+    internal val engine: EditorEngine = EditorEngine(initialText)
 
     internal val find: FindSession = FindSession(engine)
 
@@ -138,15 +140,63 @@ class CodeEditorController internal constructor() {
         } else clamped
     }
 
-    /** 替换整篇。供 [CodeEditor] 播种初始文本。播种后文档不脏（新打开的文档没有未保存改动）。 */
-    internal fun setText(value: String) {
-        if (engine.getText() != value) {
-            engine.setText(value)
-            savedVersion = engine.buffer.version
-        }
+    /**
+     * 换文档：无条件以 [text] 整篇替换——清撤销历史、光标回文首（keep-in-view 随之把视口滚回文档
+     * 开头）、脏标记复位。即使 [text] 与当前内容相同也完整执行：重开同名文件就该回到「刚打开」状态，
+     * 相等守卫式的静默 no-op 会把历史与脏标记留在旧状态。初始内容经 [rememberCodeEditorController]
+     * 的 initialText 播种一次，此后换文档一律走本方法。
+     */
+    fun setDocument(text: String) {
+        engine.setText(text)
+        savedVersion = engine.buffer.version
+    }
+
+    companion object {
+        // Bundle 事务上限 ~1MB：超限文档不入 instance state（save 返回 null，不炸 TransactionTooLarge）；
+        // 恢复回退为工厂的 initialText 重新播种，大文件宿主应自行持久化（临时文件等）。
+        private const val SAVE_TEXT_LIMIT = 200_000
+
+        /** 进程死亡/配置变更恢复：文本 + 方向性选区 + 脏标记。滚动位置不存——恢复后 keep-in-view
+         *  按光标近似露出。脏标记只有布尔事实可携带（版本基准随进程死亡失效），恢复侧造一个不等基准。
+         *  用通用 Saver 而非 listSaver：超限文档要 save 出 null（跳过保存），listSaver 不允许。 */
+        internal val Saver: Saver<CodeEditorController, Any> = Saver(
+            save = { c ->
+                val text = c.getText()
+                if (text.length > SAVE_TEXT_LIMIT) null
+                else listOf(
+                    text,
+                    c.engine.selectionAnchor.line, c.engine.selectionAnchor.column,
+                    c.caret.line, c.caret.column,
+                    c.isModified,
+                )
+            },
+            restore = { raw ->
+                val l = raw as List<*>
+                CodeEditorController(l[0] as String).apply {
+                    engine.setSelection(
+                        TextPosition(l[1] as Int, l[2] as Int),
+                        TextPosition(l[3] as Int, l[4] as Int),
+                    )
+                    if (l[5] as Boolean) savedVersion = engine.buffer.version - 1
+                }
+            },
+        )
     }
 }
 
-/** 记住一个 [CodeEditorController]，生命周期与组合一致。 */
+/** 记住一个 [CodeEditorController]，以 [initialText] 播种（仅构造时一次；换文档用
+ *  [CodeEditorController.setDocument]）。生命周期与组合一致，不跨进程死亡/配置变更——
+ *  需要旋转不丢稿用 [rememberSaveableCodeEditorController]。 */
 @Composable
-fun rememberCodeEditorController(): CodeEditorController = remember { CodeEditorController() }
+fun rememberCodeEditorController(initialText: String = ""): CodeEditorController =
+    remember { CodeEditorController(initialText) }
+
+/**
+ * 同 [rememberCodeEditorController]，另经 rememberSaveable 在进程死亡/配置变更（旋转）后恢复文本、
+ * 选区与脏标记——旋转不丢稿。超过约 20 万字符的文档不入 instance state（Bundle 事务上限 ~1MB，
+ * 超限即 TransactionTooLargeException），此时恢复回退为按 [initialText] 重新播种；大文件宿主应
+ * 自行持久化（如临时文件）。滚动位置不保存，恢复后按光标位置近似露出。
+ */
+@Composable
+fun rememberSaveableCodeEditorController(initialText: String = ""): CodeEditorController =
+    rememberSaveable(saver = CodeEditorController.Saver) { CodeEditorController(initialText) }

@@ -37,7 +37,7 @@ import top.yukonga.scripta.editor.EditorLanguage
 import top.yukonga.scripta.editor.LineNumberMode
 import top.yukonga.scripta.editor.highlight.SyntaxColors
 import top.yukonga.scripta.editor.highlight.TokenStyle
-import top.yukonga.scripta.editor.rememberCodeEditorController
+import top.yukonga.scripta.editor.rememberSaveableCodeEditorController
 
 /** 演示可选的三套编辑器配色：两套内置预设 + 一套全槽位自定义。 */
 private enum class DemoTheme { Dark, Light, Custom }
@@ -78,8 +78,8 @@ private val CustomEditorColors = EditorColors(
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun SampleScreen(modifier: Modifier = Modifier) {
-    val controller = rememberCodeEditorController()
-    var text by remember { mutableStateOf(SAMPLE_YAML) }
+    // saveable 版：旋转/进程死亡后文本、选区、脏标记自动恢复（超大文档自动跳过 instance state）。
+    val controller = rememberSaveableCodeEditorController(SAMPLE_YAML)
     var language by remember { mutableStateOf(EditorLanguage.Yaml) }
     var wrap by remember { mutableStateOf(false) }
     var readOnly by remember { mutableStateOf(false) }
@@ -114,7 +114,7 @@ fun SampleScreen(modifier: Modifier = Modifier) {
             errorMessage = null
             openedName = name
             language = languageForName(name)
-            text = content
+            controller.setDocument(content)
         },
         onError = { errorMessage = it },
     )
@@ -147,7 +147,7 @@ fun SampleScreen(modifier: Modifier = Modifier) {
                 text = "  示例  ",
                 style = TextStyle(color = cSample, fontSize = 13.sp),
                 modifier = Modifier.clickable {
-                    text = SAMPLE_YAML
+                    controller.setDocument(SAMPLE_YAML)
                     language = EditorLanguage.Yaml
                     openedName = null
                     errorMessage = null
@@ -249,7 +249,6 @@ fun SampleScreen(modifier: Modifier = Modifier) {
         }
         CodeEditor(
             controller = controller,
-            initialText = text,
             language = language,
             colors = editorColors,
             softWrap = wrap,

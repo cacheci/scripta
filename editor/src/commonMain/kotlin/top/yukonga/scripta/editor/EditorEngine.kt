@@ -52,6 +52,9 @@ class EditorEngine(initialText: String = "") {
     private val anchor: TextPosition get() = directional.start
     private val head: TextPosition get() = directional.end
 
+    /** 选区固定端（anchor）。供 controller 的状态保存（Saver）取方向性选区；活动端走 [caret]。 */
+    internal val selectionAnchor: TextPosition get() = anchor
+
     /** 选区活动端（head）：光标闪烁 / keep-in-view 应跟随它。空选区时 head==anchor==光标位置。 */
     val caret: TextPosition get() = head
 

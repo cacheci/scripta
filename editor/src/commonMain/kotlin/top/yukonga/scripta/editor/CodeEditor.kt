@@ -176,7 +176,6 @@ private fun isNarrowGridText(s: String): Boolean = s.all { it.code in 0x20..0x7E
 @Composable
 fun CodeEditor(
     controller: CodeEditorController,
-    initialText: String,
     modifier: Modifier = Modifier,
     language: EditorLanguage = EditorLanguage.PlainText,
     colors: EditorColors = EditorColors.Default,
@@ -191,10 +190,11 @@ fun CodeEditor(
      */
     highlighter: SyntaxHighlighter? = null,
 ) {
+    // 初始内容在 rememberCodeEditorController(initialText) 工厂里播种（构造即播种：无空文档首帧、
+    // 无重组重播风险）；换文档走 controller.setDocument。本 composable 不再有文本入参。
     val engine = controller.engine
     val findSession = controller.find
     val gotoSession = controller.gotoLine
-    LaunchedEffect(initialText) { controller.setText(initialText) }
 
     // 查找结果重算：可见性 / 查询串 / 三个开关 / 文档版本任一变化即重算（snapshotFlow 只订阅这些读取，
     // 不牵动本可组合重组）。列表做结构比较，去掉纯粹的重复快照。

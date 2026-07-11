@@ -9,11 +9,7 @@ import kotlin.test.assertTrue
 /** Controller 编程操作（B3+B4）：select/jumpTo/jumpToLine、revealTick、代理对钳制、insertText/replaceRange。 */
 class ControllerProgrammaticOpsTest {
 
-    private fun controller(text: String): CodeEditorController {
-        val c = CodeEditorController()
-        c.setText(text)
-        return c
-    }
+    private fun controller(text: String): CodeEditorController = CodeEditorController(text)
 
     // --- B3 select / jumpTo ---
 
