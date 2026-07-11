@@ -21,7 +21,7 @@ import top.yukonga.scripta.editor.text.TextRange
  *
  * **全部成员仅限 UI 线程**：内部文档模型是无同步的 piece-tree，且 [getText] 并非纯读（会回写整篇
  * 缓存）——后台线程即使「只读」也是数据竞争。保存范式：主线程无挂起点地背靠背取
- * `val v = documentVersion; val text = getText()`，切 IO 线程写盘，回主线程 `markSaved(v)`。
+ * `val v = documentVersion; val text = getText(lineEnding)`，切 IO 线程写盘，回主线程 `markSaved(v)`。
  */
 @Stable
 class CodeEditorController internal constructor(initialText: String = "") {
@@ -32,8 +32,20 @@ class CodeEditorController internal constructor(initialText: String = "") {
 
     internal val gotoLine: GotoLineSession = GotoLineSession(engine)
 
-    /** 拉取当前文档文本。 */
+    /** 拉取当前文档文本（LF 规范形——编辑器内部换行恒为 `\n`，查找/offset 都以它计）。
+     *  **保存到文件请用带参重载** `getText(lineEnding)`：CRLF 文件经无参版落盘会被静默改写成 LF。 */
     fun getText(): String = engine.getText()
+
+    /** 文档的换行风格：载入（构造播种 / [setDocument]）时对原始文本检测，编辑不改变。快照 state。 */
+    var lineEnding: LineEnding by mutableStateOf(detectLineEnding(initialText))
+        private set
+
+    /** 以 [lineEnding] 风格取全文。保存路径写 `getText(controller.lineEnding)` 即按文档原风格还原；
+     *  显式传另一风格即换行符转换导出。O(n) 一次拼接，保存频度可担。 */
+    fun getText(lineEnding: LineEnding): String {
+        val lf = engine.getText()
+        return if (lineEnding == LineEnding.CRLF) lf.replace("\n", "\r\n") else lf
+    }
 
     /** 当前选区（恒归一化 start ≤ end；空选区 = 光标）。快照 state。行/列 0 基，列是 UTF-16 char 下标。 */
     val selection: TextRange get() = engine.selection
@@ -147,6 +159,7 @@ class CodeEditorController internal constructor(initialText: String = "") {
      * 的 initialText 播种一次，此后换文档一律走本方法。
      */
     fun setDocument(text: String) {
+        lineEnding = detectLineEnding(text) // 对原始入参检测——进 buffer 后 CRLF 已被规整掉
         engine.setText(text)
         savedVersion = engine.buffer.version
     }
@@ -168,6 +181,7 @@ class CodeEditorController internal constructor(initialText: String = "") {
                     c.engine.selectionAnchor.line, c.engine.selectionAnchor.column,
                     c.caret.line, c.caret.column,
                     c.isModified,
+                    c.lineEnding.name, // 保存的是 LF 规范形，重检测会丢 CRLF——风格须显式随行囊
                 )
             },
             restore = { raw ->
@@ -178,6 +192,7 @@ class CodeEditorController internal constructor(initialText: String = "") {
                         TextPosition(l[3] as Int, l[4] as Int),
                     )
                     if (l[5] as Boolean) savedVersion = engine.buffer.version - 1
+                    lineEnding = LineEnding.valueOf(l[6] as String)
                 }
             },
         )
@@ -200,3 +215,15 @@ fun rememberCodeEditorController(initialText: String = ""): CodeEditorController
 @Composable
 fun rememberSaveableCodeEditorController(initialText: String = ""): CodeEditorController =
     rememberSaveable(saver = CodeEditorController.Saver) { CodeEditorController(initialText) }
+
+/** 换行风格多数决：`\r\n` 对比孤 `\n`，平手/无换行 = LF；孤 `\r`（旧 Mac）不计——两态够用，不引 CR 三态。 */
+private fun detectLineEnding(raw: String): LineEnding {
+    var crlf = 0
+    var lf = 0
+    var i = raw.indexOf('\n')
+    while (i >= 0) {
+        if (i > 0 && raw[i - 1] == '\r') crlf++ else lf++
+        i = raw.indexOf('\n', i + 1)
+    }
+    return if (crlf > lf) LineEnding.CRLF else LineEnding.LF
+}

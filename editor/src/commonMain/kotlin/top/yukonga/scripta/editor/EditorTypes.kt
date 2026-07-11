@@ -4,6 +4,10 @@ import androidx.compose.runtime.Immutable
 import androidx.compose.ui.graphics.Color
 import top.yukonga.scripta.editor.highlight.SyntaxColors
 
+/** 文档的换行风格：载入时检测（多数决，平手/无换行 = LF；孤 \r 计 LF），编辑不改变。
+ *  编辑器内部恒以 LF 规范形工作；保存用 [CodeEditorController.getText] 的带参重载按此还原。 */
+enum class LineEnding { LF, CRLF }
+
 /** The language the editor is configured for: selects the built-in highlighter plugin (PlainText = none). A custom [top.yukonga.scripta.editor.highlight.SyntaxHighlighter] passed to [CodeEditor] takes precedence. */
 enum class EditorLanguage {
     PlainText,
