@@ -35,6 +35,7 @@ class GotoLineSession internal constructor(private val engine: EditorEngine) {
         val n = text.toLongOrNull() ?: Long.MAX_VALUE // 全数字但超 Long：按极大值钳到末行
         val line = n.coerceIn(1L, engine.buffer.lineCount.toLong()).toInt() - 1
         engine.setCursor(TextPosition(line, 0))
+        engine.requestReveal() // 跳到「当前行」时选区不变、快照不失效，须经强制通道露出
         close()
         return true
     }

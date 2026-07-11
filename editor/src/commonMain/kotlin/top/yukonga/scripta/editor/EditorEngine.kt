@@ -55,6 +55,16 @@ class EditorEngine(initialText: String = "") {
     /** 选区活动端（head）：光标闪烁 / keep-in-view 应跟随它。空选区时 head==anchor==光标位置。 */
     val caret: TextPosition get() = head
 
+    /** 强制露出请求计数：编程定位（controller.select/jumpTo、查找导航、跳转行号）bump 它，keep-in-view
+     *  把它并入观测值——目标与当前选区相等时快照不失效（结构相等去重），没有本通道「跳到原地」就不会
+     *  滚回。刻意不进 setCursor/setSelection 通用路径：手势路径的 clip-gate 行为回归敏感，编程入口够用。 */
+    internal var revealTick: Int by mutableStateOf(0)
+        private set
+
+    internal fun requestReveal() {
+        revealTick++
+    }
+
     var composing: TextRange? by mutableStateOf(null)
         private set
 
@@ -370,7 +380,7 @@ class EditorEngine(initialText: String = "") {
 
     // --- 编辑原语 ----------------------------------------------------------------------------
 
-    private fun replaceRange(range: TextRange, text: String, kind: EditKind = EditKind.Other) {
+    internal fun replaceRange(range: TextRange, text: String, kind: EditKind = EditKind.Other) {
         val selBefore = selectionSnapshot()
         val (edit, newCaret) = replaceCollecting(range, text)
         composing = null

@@ -679,7 +679,11 @@ fun CodeEditor(
     // snapshotFlow 再 emit 一次、门禁解除后复位一次（修「拖到短行后滚出屏、松手不复位」）。露出走上面的 rememberUpdatedState
     // （当前帧几何）；effect 仍 key=Unit → 不随缩放重启、不会缩放后强行把视口滚到光标。
     LaunchedEffect(Unit) {
-        snapshotFlow { Triple(engine.selection, viewportHeight, viewportWidth) to (selectionDragActive || caretDragActive) }.collect {
+        // revealTick 必须进发射值：snapshotFlow 按结构相等去重，编程定位跳到「原地」（重复点同一 lint
+        // 错误、goto 跳当前行）时 selection 不变、只有 tick 在动——不进值就不发射、视口滚不回来。
+        snapshotFlow {
+            listOf(engine.revealTick, engine.selection, viewportHeight, viewportWidth, selectionDragActive || caretDragActive)
+        }.collect {
             if (viewportHeight <= 0f) return@collect
             if (selectionDragActive || caretDragActive) return@collect // 选区/光标手柄拖拽时由边缘自动滚动接管
             revealCaretIntoViewLive.value()

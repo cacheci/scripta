@@ -92,11 +92,12 @@ class FindSession internal constructor(private val engine: EditorEngine) {
         activate(i)
     }
 
-    /** 选中第 [i] 个匹配（keep-in-view 随选区变化自动滚动露出）。 */
+    /** 选中第 [i] 个匹配并滚动露出（选区未变时——如 refresh 后重激活同一匹配——经强制通道露出）。 */
     private fun activate(i: Int) {
         val m = result.matches.getOrNull(i) ?: return
         activeIndex = i
         engine.setSelection(engine.buffer.positionAt(m.start), engine.buffer.positionAt(m.end))
+        engine.requestReveal()
     }
 
     /**
