@@ -17,7 +17,7 @@ internal fun languageForName(name: String?): EditorLanguage {
  */
 internal val SAMPLE_YAML = """
     # scripta — YAML 示例（覆盖常见语法场景）
-    # 「打开」载入本地文件，或直接编辑；双指缩放、长按选词、拖动手柄看放大镜、底部符号条一键插入。
+    # 「打开」载入本地文件，或直接编辑；双指缩放、长按选词（弹操作条）、点光标弹粘贴气泡、拖动手柄看放大镜、底部符号条一键插入。
     name: scripta
     version: 0.1.0
     released: 2026-07-06
@@ -50,7 +50,10 @@ internal val SAMPLE_YAML = """
         - 自管 IME(拼音 composing)
         - 软换行
         - 超长行网格化
-      gestures: {tap: 落光标, long_press: 选词, pinch: 双指缩放}
+        - 语法高亮(可插拔, 内置 YAML)
+        - 撤销/重做
+        - 查找/替换
+      gestures: {tap: 落光标, long_press: 选词, pinch: 双指缩放, menu: 选区悬浮条}
       themes:
         - {name: dark,  bg: "#1E1E1E", fg: "#E0E0E0"}
         - {name: light, bg: "#FFFFFF", fg: "#1E1E1E"}
