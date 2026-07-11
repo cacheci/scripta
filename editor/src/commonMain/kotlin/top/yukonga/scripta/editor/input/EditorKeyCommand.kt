@@ -16,8 +16,12 @@ enum class EditorKeyCommand {
     WordLeft, WordRight, LineStart, LineEnd, DocStart, DocEnd, PageUp, PageDown,
 }
 
-/** 平台主修饰键映射（Windows/Linux/Android，硬件键盘）：Ctrl 系。 */
+/** 平台主修饰键映射（Windows/Linux/Android，硬件键盘）：Ctrl 系。
+ *  Alt 参与的组合一律不解析：Ctrl+Alt+X 不是 Ctrl+X；更要紧的是 Windows 把 AltGr 上报为 Ctrl+Alt
+ *  （skiko 再把 AltGraph 折进 isAltPressed），欧洲布局按 AltGr+V 打 `@` 若被解析成 Paste，
+ *  字符就永远到不了插入路径（insertTypedCharacter）。 */
 internal fun resolveCtrlBased(e: KeyEvent): EditorKeyCommand? {
+    if (e.isAltPressed) return null
     val ctrl = e.isCtrlPressed
     return when (e.key) {
         Key.A -> if (ctrl) EditorKeyCommand.SelectAll else null
