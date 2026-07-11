@@ -160,6 +160,9 @@ private class EditorTextInputNode(var engine: EditorEngine) :
                 }
             }
             engine.requestShowKeyboard = { imm?.showSoftInput(v, 0) }
+            // 换文档时重启输入连接：预编辑进行中被 setText 单方清掉时，仅靠 updateSelection(composing=-1)
+            // 不足以让所有输入法丢弃旧组合状态，残留候选可能提交进新文档的 (0,0)。
+            engine.onDocumentReplaced = { imm?.restartInput(v) }
             val request = PlatformTextInputMethodRequest { outAttrs ->
                 // NO_SUGGESTIONS：代码/YAML 不要候选条与拼写波浪线，避免输入法把 fooBar、i++ 等联想改坏。
                 outAttrs.inputType =
@@ -178,6 +181,7 @@ private class EditorTextInputNode(var engine: EditorEngine) :
             } finally {
                 engine.imeListener = null
                 engine.requestShowKeyboard = null
+                engine.onDocumentReplaced = null
             }
         }
     }
@@ -188,5 +192,6 @@ private class EditorTextInputNode(var engine: EditorEngine) :
         focused = false
         engine.imeListener = null
         engine.requestShowKeyboard = null
+        engine.onDocumentReplaced = null
     }
 }

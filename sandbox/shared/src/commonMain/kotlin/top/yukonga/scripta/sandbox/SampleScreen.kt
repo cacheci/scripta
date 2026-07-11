@@ -23,6 +23,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.Saver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -80,11 +82,15 @@ private val CustomEditorColors = EditorColors(
 fun SampleScreen(modifier: Modifier = Modifier) {
     // saveable 版：旋转/进程死亡后文本、选区、脏标记自动恢复（超大文档自动跳过 instance state）。
     val controller = rememberSaveableCodeEditorController(SAMPLE_YAML)
-    var language by remember { mutableStateOf(EditorLanguage.Yaml) }
+    // 文档经 saveable controller 恢复，语言/文件名这两个文档元数据必须一起持久化——否则进程死亡
+    // 恢复后 .kt 内容按 YAML 高亮、标题丢文件名（不能靠 openedName 反推语言：示例路径 name=null 但语言=Yaml）。
+    var language by rememberSaveable(
+        stateSaver = Saver({ it.name }, { EditorLanguage.valueOf(it) }),
+    ) { mutableStateOf(EditorLanguage.Yaml) }
     var wrap by remember { mutableStateOf(false) }
     var readOnly by remember { mutableStateOf(false) }
     var lineNumberMode by remember { mutableStateOf(LineNumberMode.PinnedToScreen) }
-    var openedName by remember { mutableStateOf<String?>(null) }
+    var openedName by rememberSaveable { mutableStateOf<String?>(null) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
 
     val systemDark = isSystemInDarkTheme()

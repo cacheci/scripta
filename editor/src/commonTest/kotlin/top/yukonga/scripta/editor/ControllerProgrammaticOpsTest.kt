@@ -140,6 +140,50 @@ class ControllerProgrammaticOpsTest {
     }
 
     @Test
+    fun insertTextDoesNotMergeWithPrecedingUserTyping() {
+        // 编程插入是语义断点：不并入用户键入单元，否则一次 undo 连用户自己的词一起吞掉。
+        val c = controller("")
+        c.engine.insert("h"); c.engine.insert("i") // 用户连续键入（合并为一单元）
+        c.insertText("!")
+        c.undo()
+        assertEquals("hi", c.getText())
+    }
+
+    @Test
+    fun userTypingAfterInsertTextDoesNotMergeIn() {
+        val c = controller("")
+        c.insertText("!")
+        c.engine.insert("a")
+        c.undo()
+        assertEquals("!", c.getText())
+    }
+
+    @Test
+    fun emptyInsertTextWithEmptySelectionIsNoOp() {
+        // 空插入不产生编辑：不置脏、不留空撤销单元。
+        val c = controller("ab")
+        c.insertText("")
+        assertEquals(false, c.isModified)
+        assertEquals(false, c.canUndo)
+    }
+
+    @Test
+    fun emptyReplaceOfEmptyRangeIsNoOp() {
+        val c = controller("ab")
+        c.replaceRange(TextPosition(0, 1), TextPosition(0, 1), "")
+        assertEquals(false, c.isModified)
+        assertEquals(false, c.canUndo)
+    }
+
+    @Test
+    fun replaceRangeBumpsRevealTick() {
+        val c = controller("hello")
+        val t0 = c.engine.revealTick
+        c.replaceRange(TextPosition(0, 0), TextPosition(0, 5), "hi")
+        assertTrue(c.engine.revealTick > t0)
+    }
+
+    @Test
     fun replaceRangeWholeDocumentKeepsUndoHistory() {
         val c = controller("old\ncontent")
         c.engine.insert("!") // 先制造一条历史

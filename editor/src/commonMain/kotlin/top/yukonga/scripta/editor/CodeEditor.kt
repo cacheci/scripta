@@ -677,8 +677,9 @@ fun CodeEditor(
     // keep-in-view：光标随选区/视口变化滚动露出。用 snapshotFlow 观察 (selection, viewport)、不把 selection 当组合期 key（P1）。
     // 观测集并入「是否正在手柄拖拽」：拖拽期标志为真、下方直接 return（滚动由边缘自动滚动接管）；拖拽结束标志 true→false 令
     // snapshotFlow 再 emit 一次、门禁解除后复位一次（修「拖到短行后滚出屏、松手不复位」）。露出走上面的 rememberUpdatedState
-    // （当前帧几何）；effect 仍 key=Unit → 不随缩放重启、不会缩放后强行把视口滚到光标。
-    LaunchedEffect(Unit) {
+    // （当前帧几何）；effect 以 engine 为 key——闭包捕获 engine，宿主换绑 controller 时必须重启、否则永远观测旧引擎的
+    // tick/selection（reveal 通道死掉）；缩放/字号变化不换 engine、不重启，仍不会缩放后强行把视口滚到光标。
+    LaunchedEffect(engine) {
         // revealTick 必须进发射值：snapshotFlow 按结构相等去重，编程定位跳到「原地」（重复点同一 lint
         // 错误、goto 跳当前行）时 selection 不变、只有 tick 在动——不进值就不发射、视口滚不回来。
         snapshotFlow {

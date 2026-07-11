@@ -60,6 +60,17 @@ class ControllerDocumentLifecycleTest {
     }
 
     @Test
+    fun setDocumentBumpsRevealTickEvenWithCaretAlreadyAtStart() {
+        // 手势约定是「拖拽只滚动、不动光标」——光标停 (0,0)、视口在中部是换文档的常态。此时
+        // collapseCaret 写入结构相等的选区、快照不失效，视口回顶必须走强制露出通道。
+        val c = CodeEditorController("a\nb\nc")
+        assertEquals(TextPosition(0, 0), c.caret)
+        val t0 = c.engine.revealTick
+        c.setDocument("x\ny")
+        assertTrue(c.engine.revealTick > t0)
+    }
+
+    @Test
     fun setDocumentBumpsContentGeneration() {
         val c = CodeEditorController("a")
         val g = c.engine.contentGeneration

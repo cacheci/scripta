@@ -61,7 +61,8 @@ class CodeEditorController internal constructor(initialText: String = "") {
      *  [documentVersion] 随之推进），自动保存应以本值门控（如 `filter { !isComposing }`）。快照 state。 */
     val isComposing: Boolean get() = engine.composing != null
 
-    // 「已保存」基准版本。初值 = 构造时版本：新 controller 不脏；播种/换文档后由 setText 重置。
+    // 「已保存」基准版本。初值 = 构造（播种后）版本：新 controller 不脏；换文档由 setDocument 重置，
+    // Saver.restore 恢复脏文档时另造不等基准。
     private var savedVersion: Int by mutableStateOf(engine.buffer.version)
 
     /** 自上次 [markSaved]（或换文档）以来文档是否被改过。保守语义：按版本比较——undo 回到保存点、
@@ -125,8 +126,11 @@ class CodeEditorController internal constructor(initialText: String = "") {
      *  （不丢失、自成撤销单元）再插入——宿主文本决不顶替用户未提交的拼音。不经 readOnly 门：
      *  那是 UI 交互约束，宿主的编程修改由宿主负责。 */
     fun insertText(text: String) {
-        engine.finishComposing()
-        engine.insert(text)
+        engine.finishComposing() // 先定格：预编辑存在时空文本插入也有真实编辑（预编辑入文），不能提前短路
+        if (text.isEmpty() && engine.selection.isEmpty) return // 空插入不产生编辑：不置脏、不留空撤销单元
+        // replaceSelection（EditKind.Other，从不合并）而非 insert（Typing，会并单元）：编程插入是语义断点，
+        // 并入用户键入单元会让一次 undo 连用户自己的词一起吞掉。
+        engine.replaceSelection(text)
     }
 
     /**
@@ -137,7 +141,11 @@ class CodeEditorController internal constructor(initialText: String = "") {
      */
     fun replaceRange(start: TextPosition, end: TextPosition, text: String) {
         engine.finishComposing()
-        engine.replaceRange(TextRange(snapToCodePoint(start), snapToCodePoint(end)), text)
+        val s = snapToCodePoint(start)
+        val e = snapToCodePoint(end)
+        if (text.isEmpty() && s == e) return // 空范围空文本 = 无编辑：不置脏、不留空撤销单元
+        engine.replaceRange(TextRange(s, e), text)
+        engine.requestReveal() // 与 select/jumpTo 同约定：编程操作保证露出（光标写可能与旧值结构相等）
     }
 
     // 公开入口的列钳制：数值越界 + 代理对中间回退（内部导航恒按码点移动、到不了对儿中间；lint/编译器
@@ -161,6 +169,7 @@ class CodeEditorController internal constructor(initialText: String = "") {
     fun setDocument(text: String) {
         lineEnding = detectLineEnding(text) // 对原始入参检测——进 buffer 后 CRLF 已被规整掉
         engine.setText(text)
+        engine.requestReveal() // 光标可能本就在 (0,0)（拖拽只滚动不动光标）：selection 不失效，须经强制通道滚回文首
         savedVersion = engine.buffer.version
     }
 

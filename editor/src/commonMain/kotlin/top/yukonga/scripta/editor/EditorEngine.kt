@@ -94,6 +94,10 @@ class EditorEngine(initialText: String = "") {
     var imeListener: ImeListener? = null
     var requestShowKeyboard: (() -> Unit)? = null
 
+    /** 整篇替换（setText/换文档）后的平台通知：Android 侧接 restartInput——换文档可能发生在预编辑
+     *  进行中，仅靠 updateSelection(composing=-1) 不足以让所有输入法丢弃旧文档的组合状态。 */
+    var onDocumentReplaced: (() -> Unit)? = null
+
     private val history = UndoHistory()
 
     // 待消费的行结构变化，按发生顺序（见 [LineSplice] 关于为何不能像 dirty 那样并集合并）。
@@ -154,6 +158,7 @@ class EditorEngine(initialText: String = "") {
         contentGeneration++ // 换文档：视图层据此重置横向范围等跨文档累积量
         history.clear() // 整篇替换 = 换文档，旧文档的编辑历史不再适用
         syncHistory()
+        onDocumentReplaced?.invoke() // 平台侧重启输入连接（预编辑中换文档，见声明处）
         markDirty(0, Int.MAX_VALUE, structural = true)
         pendingSplices.clear() // 换代后视图按新文档行数整建行索引，残留旧文档 splice 若被应用会错位
         maybeNotify()
