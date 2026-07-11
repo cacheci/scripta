@@ -1115,9 +1115,15 @@ fun CodeEditor(
                         Key.Enter, Key.NumPadEnter -> {
                             if (!readOnly) engine.insertNewlineAutoIndent(); true
                         }
-                        // 可编辑时 Tab 插入缩进并消费，防止焦点遍历把焦点带走；只读放行焦点切换。
+                        // 可编辑时 Tab 消费，防止焦点遍历把焦点带走；只读放行焦点切换。
+                        // Shift+Tab 反缩进（光标时作用当前行）；有选区的 Tab 块缩进；光标 Tab 插一档缩进。
                         Key.Tab -> if (readOnly) false else {
-                            engine.insert("    "); true
+                            when {
+                                shift -> engine.outdentSelectedLines()
+                                engine.selStart != engine.selEnd -> engine.indentSelectedLines()
+                                else -> engine.insert(EditorEngine.INDENT_UNIT)
+                            }
+                            true
                         }
                         // 可打印字符回退（桌面无 IME 参与的字符经 KeyEvent 到达；Android 走 InputConnection、返回 false）。
                         else -> insertTypedCharacter(engine, ev, readOnly)

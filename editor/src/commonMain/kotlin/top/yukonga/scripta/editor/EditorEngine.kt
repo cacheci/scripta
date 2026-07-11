@@ -33,6 +33,11 @@ internal data class LineSplice(val startLine: Int, val oldLines: Int, val newLin
  */
 class EditorEngine(initialText: String = "") {
 
+    companion object {
+        /** 缩进单位：Tab 键插入 / 块缩进 / 反缩进共用的一档宽度。 */
+        const val INDENT_UNIT = "    "
+    }
+
     val buffer = TextBuffer()
 
     var selection: TextRange by mutableStateOf(TextRange.cursor(TextPosition(0, 0)))
@@ -264,6 +269,81 @@ class EditorEngine(initialText: String = "") {
         syncHistory()
         maybeNotify()
         return ranges.size
+    }
+
+    /** Tab 块缩进：选区触及的每个非空行行首插入 [INDENT_UNIT]（光标时只作用当前行）。
+     *  整块一个撤销单元；选区端点随文本平移，行首端点钉在行首——反复缩进/反缩进时选区稳定贴边。 */
+    fun indentSelectedLines() {
+        val edits = affectedLines().mapNotNull { line ->
+            if (buffer.lineLength(line) == 0) return@mapNotNull null // 空行不留尾随空白
+            val p = buffer.offsetAt(TextPosition(line, 0))
+            p to p
+        }
+        applyLineStartEdits(edits, INDENT_UNIT)
+    }
+
+    /** Shift+Tab 反缩进：每行行首删一个缩进级——行首是 Tab 删 1 个 Tab，否则删至多 [INDENT_UNIT] 个空格。 */
+    fun outdentSelectedLines() {
+        val edits = affectedLines().mapNotNull { line ->
+            val text = buffer.lineText(line)
+            val k = if (text.startsWith("\t")) 1 else {
+                var n = 0
+                while (n < INDENT_UNIT.length && n < text.length && text[n] == ' ') n++
+                n
+            }
+            if (k == 0) return@mapNotNull null
+            val p = buffer.offsetAt(TextPosition(line, 0))
+            p to p + k
+        }
+        applyLineStartEdits(edits, "")
+    }
+
+    /** 选区触及的行区间；非空选区终点恰在行首时末行不算（选到下一行行首 ≠ 选中那一行）。 */
+    private fun affectedLines(): IntRange {
+        val s = selStart
+        val e = selEnd
+        val endLine = if (e.line > s.line && e.column == 0) e.line - 1 else e.line
+        return s.line..endLine
+    }
+
+    /**
+     * 把 [ranges]（升序、互不重叠的行首编辑区间）全部替换为 [replacement]，一个撤销单元。
+     * 与 [replaceAllOffsetRanges] 的差别在选区语义：不折叠光标，而是把 anchor/head 各自按编辑平移
+     * （落在被删空白内的端点贴回编辑点），保持选区方向与覆盖直觉。
+     */
+    private fun applyLineStartEdits(ranges: List<Pair<Int, Int>>, replacement: String) {
+        if (ranges.isEmpty()) return
+        val selBefore = selectionSnapshot()
+        var aOff = selBefore.anchor
+        var hOff = selBefore.head
+        for ((s, e) in ranges) { // 平移在原 offset 坐标下累计（每条区间互不重叠，逐条叠加成立）
+            val removed = e - s
+            aOff = shiftForEdit(aOff, s, removed, replacement.length)
+            hOff = shiftForEdit(hOff, s, removed, replacement.length)
+        }
+        val edits = ArrayList<TextEdit>(ranges.size)
+        for ((s, e) in ranges.asReversed()) { // 降序应用：前面区间的 offset 不受影响
+            val (edit, _) = replaceCollecting(TextRange(buffer.positionAt(s), buffer.positionAt(e)), replacement)
+            edits.add(edit)
+        }
+        composing = null
+        desiredColumn = null
+        anchor = buffer.positionAt(aOff)
+        head = buffer.positionAt(hOff)
+        selection = TextRange(anchor, head).normalized()
+        val selAfter = SelectionState(aOff, hOff)
+        history.beginGroup()
+        for (edit in edits) history.record(edit, selBefore, selAfter, EditKind.Other)
+        history.endGroup()
+        syncHistory()
+        maybeNotify()
+    }
+
+    /** 单条编辑对端点 offset 的平移：编辑点前不动；落在被删区段内贴回编辑点（含替换文本末）；其后按净增减平移。 */
+    private fun shiftForEdit(off: Int, start: Int, removed: Int, inserted: Int): Int = when {
+        off <= start -> off
+        off <= start + removed -> start + inserted
+        else -> off - removed + inserted
     }
 
     // --- 选择 --------------------------------------------------------------------------------
