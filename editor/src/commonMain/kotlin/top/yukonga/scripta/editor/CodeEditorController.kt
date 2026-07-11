@@ -16,6 +16,8 @@ class CodeEditorController internal constructor() {
 
     internal val find: FindSession = FindSession(engine)
 
+    internal val gotoLine: GotoLineSession = GotoLineSession(engine)
+
     /** 拉取当前文档文本。 */
     fun getText(): String = engine.getText()
 
@@ -26,12 +28,29 @@ class CodeEditorController internal constructor() {
     val canRedo: Boolean get() = engine.canRedo
 
     /** 打开查找 / 查找替换条（两种模式互斥：纯查找不带替换行）、关闭。宿主可编程驱动（工具栏按钮等）；
-     *  快捷键在编辑器内部已接。 */
-    fun openFind() = find.open(withReplace = false)
-    fun openReplace() = find.open(withReplace = true)
+     *  快捷键在编辑器内部已接。停靠条之间互斥：打开一条先收起另一条。 */
+    fun openFind() {
+        gotoLine.close()
+        find.open(withReplace = false)
+    }
+
+    fun openReplace() {
+        gotoLine.close()
+        find.open(withReplace = true)
+    }
+
     fun closeFind() = find.close()
     val isFindVisible: Boolean get() = find.visible
     val isReplaceVisible: Boolean get() = find.replaceVisible
+
+    /** 打开 / 关闭跳转行号条（Ctrl+G / mac Cmd+L 在编辑器内部已接）。 */
+    fun openGotoLine() {
+        find.close()
+        gotoLine.open()
+    }
+
+    fun closeGotoLine() = gotoLine.close()
+    val isGotoLineVisible: Boolean get() = gotoLine.visible
 
     /** 替换整篇。供 [CodeEditor] 播种初始文本。 */
     internal fun setText(value: String) {

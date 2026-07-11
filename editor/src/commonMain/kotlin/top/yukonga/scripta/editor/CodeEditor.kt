@@ -80,6 +80,7 @@ import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import top.yukonga.scripta.editor.find.FindReplaceBar
+import top.yukonga.scripta.editor.find.GotoLineBar
 import top.yukonga.scripta.editor.highlight.HighlightCache
 import top.yukonga.scripta.editor.highlight.HighlightSpan
 import top.yukonga.scripta.editor.highlight.SyntaxHighlighter
@@ -192,6 +193,7 @@ fun CodeEditor(
 ) {
     val engine = controller.engine
     val findSession = controller.find
+    val gotoSession = controller.gotoLine
     LaunchedEffect(initialText) { controller.setText(initialText) }
 
     // 查找结果重算：可见性 / 查询串 / 三个开关 / 文档版本任一变化即重算（snapshotFlow 只订阅这些读取，
@@ -908,6 +910,12 @@ fun CodeEditor(
             readOnly = readOnly,
             onRequestEditorFocus = { focusRequester.requestFocus() },
         )
+        GotoLineBar(
+            session = gotoSession,
+            lineCount = lineCount,
+            colors = colors,
+            onRequestEditorFocus = { focusRequester.requestFocus() },
+        )
         Box(
             Modifier
                 .fillMaxWidth()
@@ -1062,11 +1070,21 @@ fun CodeEditor(
                             EditorKeyCommand.Undo -> clipboardActions.perform(EditorContextAction.Undo)
                             EditorKeyCommand.Redo -> clipboardActions.perform(EditorContextAction.Redo)
 
-                            // 查找 / 替换：打开浮条（焦点移交查询框）；F3 / Cmd+G 系在浮条开着时步进导航。
-                            EditorKeyCommand.Find -> findSession.open(withReplace = false)
-                            EditorKeyCommand.Replace -> findSession.open(withReplace = !readOnlyLive.value)
+                            // 查找 / 替换 / 跳转行号：打开各自的停靠条（焦点移交输入框），彼此互斥；
+                            // F3 / Cmd+G 系在查找条开着时步进导航。
+                            EditorKeyCommand.Find -> {
+                                gotoSession.close(); findSession.open(withReplace = false)
+                            }
+
+                            EditorKeyCommand.Replace -> {
+                                gotoSession.close(); findSession.open(withReplace = !readOnlyLive.value)
+                            }
+
                             EditorKeyCommand.FindNext -> if (findSession.visible) findSession.next()
                             EditorKeyCommand.FindPrev -> if (findSession.visible) findSession.prev()
+                            EditorKeyCommand.GotoLine -> {
+                                findSession.close(); gotoSession.open()
+                            }
 
                             EditorKeyCommand.WordLeft -> engine.moveCaretByWord(-1, shift)
                             EditorKeyCommand.WordRight -> engine.moveCaretByWord(1, shift)
@@ -1083,10 +1101,18 @@ fun CodeEditor(
                     // composing（预编辑）进行中，方向/回车/退格等键由输入法消费、不回落到此处，故这些处理器
                     // 无需按 composing 设闸；可打印字符路径（insertTypedCharacter）则显式设了 composing 闸。
                     when (ev.key) {
-                        // 查找浮条开着时 Esc 关闭（浮条内 Esc 由其字段自行处理；这里接住焦点在编辑器时的 Esc）。
-                        Key.Escape -> if (findSession.visible) {
-                            findSession.close(); true
-                        } else false
+                        // 停靠条开着时 Esc 关闭（条内 Esc 由其字段自行处理；这里接住焦点在编辑器时的 Esc）。
+                        Key.Escape -> when {
+                            findSession.visible -> {
+                                findSession.close(); true
+                            }
+
+                            gotoSession.visible -> {
+                                gotoSession.close(); true
+                            }
+
+                            else -> false
+                        }
 
                         Key.DirectionLeft -> {
                             engine.moveCaretHorizontally(-1, shift); true

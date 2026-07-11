@@ -238,6 +238,13 @@ fun SampleScreen(modifier: Modifier = Modifier) {
                     }
                 },
             )
+            BasicText(
+                text = "  跳转  ",
+                style = TextStyle(color = cOpen, fontSize = 13.sp),
+                modifier = Modifier.clickable {
+                    if (controller.isGotoLineVisible) controller.closeGotoLine() else controller.openGotoLine()
+                },
+            )
         }
         }
         CodeEditor(

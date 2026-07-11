@@ -39,6 +39,7 @@ import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.LineHeightStyle
 import androidx.compose.ui.unit.dp
@@ -158,12 +159,13 @@ private fun counterText(session: FindSession): String = when {
 }
 
 @Composable
-private fun FindField(
+internal fun FindField(
     value: String,
     onValueChange: (String) -> Unit,
     placeholder: String,
     colors: EditorColors,
     modifier: Modifier = Modifier,
+    keyboardType: KeyboardType = KeyboardType.Text,
     onImeSearch: () -> Unit,
 ) {
     // 选区归字段内部管，文本与外部 String 同步。挂载初值全选：查找条关闭重开（字段重挂载）时
@@ -218,7 +220,7 @@ private fun FindField(
                 platformStyle = fieldPlatformStyle,
             ),
             cursorBrush = SolidColor(colors.cursor),
-            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search, keyboardType = keyboardType),
             keyboardActions = KeyboardActions(onSearch = { onImeSearch() }),
             // 撑满外框：空文本的字段本身只有光标宽，点框内空白必须也能聚焦。
             modifier = Modifier.fillMaxWidth(),
@@ -248,9 +250,9 @@ private fun ToggleChip(label: String, on: Boolean, colors: EditorColors, onToggl
     }
 }
 
-/** 动作小片（上一个 / 下一个 / 关闭 / 替换）：按下反馈同符号条键。 */
+/** 动作小片（上一个 / 下一个 / 关闭 / 替换 / 跳转）：按下反馈同符号条键。 */
 @Composable
-private fun ActionChip(label: String, colors: EditorColors, onClick: () -> Unit) {
+internal fun ActionChip(label: String, colors: EditorColors, onClick: () -> Unit) {
     var pressed by remember { mutableStateOf(false) }
     Box(
         Modifier
