@@ -19,6 +19,13 @@ import top.yukonga.scripta.editor.text.UndoStep
 internal data class DirtyRange(val from: Int, val endExclusive: Int, val structural: Boolean)
 
 /**
+ * 一次行数变化的替换：起始行 [startLine] 起的 [oldLines] 行被 [newLines] 行取代（都含起始行本身，恒 ≥ 1）。
+ * 行号是该编辑应用时刻的实时行号，多条按发生顺序依次应用才成立——与 [DirtyRange] 的并集语义不同，
+ * splice 不能合并（后一条的行号建立在前一条已生效的坐标上）。
+ */
+internal data class LineSplice(val startLine: Int, val oldLines: Int, val newLines: Int)
+
+/**
  * 编辑引擎：持有 TextBuffer + 归一化选择 + 可选 composing 区间，承载全部编辑/选择/IME 语义
  * （由 spike 的 MiniEditorState 推广到 (行,列) 坐标）。offset 只在 IME 边界经 piece-tree（buffer.offsetAt/positionAt）换算。
  *
@@ -67,6 +74,10 @@ class EditorEngine(initialText: String = "") {
     var requestShowKeyboard: (() -> Unit)? = null
 
     private val history = UndoHistory()
+
+    // 待消费的行结构变化，按发生顺序（见 [LineSplice] 关于为何不能像 dirty 那样并集合并）。
+    // 须在 init 之前初始化：构造走 setText，其中会清本队列。
+    private val pendingSplices = ArrayList<LineSplice>()
 
     // 快照 state 供 UI（菜单置灰 / 工具栏按钮）观测；随每次历史变动同步。
     var canUndo: Boolean by mutableStateOf(false)
@@ -123,6 +134,7 @@ class EditorEngine(initialText: String = "") {
         history.clear() // 整篇替换 = 换文档，旧文档的编辑历史不再适用
         syncHistory()
         markDirty(0, Int.MAX_VALUE, structural = true)
+        pendingSplices.clear() // 换代后视图按新文档行数整建行索引，残留旧文档 splice 若被应用会错位
         maybeNotify()
     }
 
@@ -206,6 +218,14 @@ class EditorEngine(initialText: String = "") {
         return d
     }
 
+    /** 取走「自上次消费以来的行结构变化」并清空；无则空表。供视觉行索引增量 splice，免于整表重建。 */
+    internal fun consumeLineSplices(): List<LineSplice> {
+        if (pendingSplices.isEmpty()) return emptyList()
+        val out = pendingSplices.toList()
+        pendingSplices.clear()
+        return out
+    }
+
     private fun markDirty(fromLine: Int, endExclusive: Int, structural: Boolean) {
         hasDirty = true
         if (fromLine < dirtyFrom) dirtyFrom = fromLine
@@ -213,11 +233,12 @@ class EditorEngine(initialText: String = "") {
         if (structural) dirtyStructural = true
     }
 
-    /** 一次替换对行的影响：从起始行到「删除/插入较多者」的行尾界；换行数不等即结构性。 */
+    /** 一次替换对行的影响：从起始行到「删除/插入较多者」的行尾界；换行数不等即结构性，并记一条行 splice。 */
     private fun markReplaceDirty(startLine: Int, removed: String, inserted: String) {
         val rb = removed.count { it == '\n' }
         val ib = inserted.count { it == '\n' }
         markDirty(startLine, startLine + maxOf(rb, ib) + 1, structural = rb != ib)
+        if (rb != ib) pendingSplices.add(LineSplice(startLine, rb + 1, ib + 1))
     }
 
     /**

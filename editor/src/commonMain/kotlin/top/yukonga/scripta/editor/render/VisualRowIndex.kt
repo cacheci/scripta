@@ -63,6 +63,26 @@ class VisualRowIndex(lineCount: Int) {
         return pos.coerceIn(0, n - 1)
     }
 
+    /**
+     * 行结构变化：从 [from] 起的 [oldLines] 行被 [newLines] 行取代。编辑区间外的已测量行数原样保留
+     * （前段不动、尾段平移），新行以 1 行估算落地、可见后经 [setRows] 收敛。这样行数一变不必整表重建：
+     * 重建会把全文档打回 1 行估算，内容总高度骤变、视口跳动。O(n) 数组拷贝 + 重建树——保的是测量数据
+     * 不是渐进复杂度；行数变化（回车/删行）远比击键稀疏，线性拷贝可担。
+     */
+    fun splice(from: Int, oldLines: Int, newLines: Int) {
+        val f = from.coerceIn(0, n)
+        val removed = oldLines.coerceIn(0, n - f)
+        val inserted = newLines.coerceAtLeast(0)
+        val m = n - removed + inserted
+        val next = IntArray(m)
+        rowsArr.copyInto(next, 0, 0, f)
+        next.fill(1, f, f + inserted)
+        rowsArr.copyInto(next, f + inserted, f + removed, n)
+        rowsArr = next
+        n = m
+        buildTree()
+    }
+
     private fun buildTree() {
         tree = IntArray(n + 1)
         for (i in 1..n) {

@@ -355,13 +355,24 @@ fun CodeEditor(
     val textAreaWidthPx = (viewportWidth - gutterWidthPx - padXPx * 2).coerceAtLeast(1f)
     val widthBucket = if (softWrap) textAreaWidthPx.toInt() else 0
 
-    // 视觉行索引：仅换行模式使用。不换行模式 lineTopPx/lineAtPx 走平凡公式、从不读它，故固定大小 1、不随行数重建。
-    // 换行模式按 (行数/宽度) 重建，但**不以字号为 key**——否则双指缩放每过一档就 O(n) 重建 IntArray(n)+buildTree，
+    // 视觉行索引：仅换行模式使用。不换行模式 lineTopPx/lineAtPx 走平凡公式、从不读它，故固定大小 1。
+    // 换行模式按 (宽度/换代) 重建，但**不以字号为 key**——否则双指缩放每过一档就 O(n) 重建 IntArray(n)+buildTree，
     // 超大 softWrap 文件缩放会剧烈掉帧。字号变时保留本索引：可见行经 layoutFor 在新字号下重测并 setRows 增量更新
     // （O(log n)/行、有界），视口外行暂留旧字号行数作估算、滚动时自然收敛——即「换行下缩放不逐帧全量重折、只增量」。
-    // 行数变化（回车）仍整表重建，待引擎暴露编辑 delta 后做增量 splice（M5）。
-    val rowIndexSize = if (softWrap) lineCount else 1
-    val rowIndex = remember(softWrap, widthBucket, rowIndexSize) { VisualRowIndex(rowIndexSize) }
+    // **也不以行数为 key**：行数变化（回车/删行）经引擎的 LineSplice 队列增量 splice（编辑区间外的已测量
+    // 行数保留、只有新行落 1 行估算），整表重建会把全文档打回估算、内容高度骤变引起视口跳动。
+    // 创建时弃置积压 splice：建索引前的编辑已反映在当前行数里，重放会错位。
+    val rowIndex = remember(softWrap, widthBucket, engine.contentGeneration) {
+        VisualRowIndex(if (softWrap) engine.buffer.lineCount else 1).also { engine.consumeLineSplices() }
+    }
+    // 编辑后、任何按行号读几何之前，先把积压的行结构变化应用到行索引。组合本身与组合外路径都要经过
+    // （layoutFor / lineTopPx / lineAtPx——keep-in-view 收集器、边缘自动滚动会在编辑后、重组前就读几何）。
+    // 非换行模式索引恒 size-1、从不读，但仍消费队列防积压。空队列时只是一次 isEmpty 检查，热路径可担。
+    fun drainRowSplices() {
+        val splices = engine.consumeLineSplices()
+        if (softWrap) for (s in splices) rowIndex.splice(s.startLine, s.oldLines, s.newLines)
+    }
+    drainRowSplices()
 
     // 逐行 layout 缓存：只在宽度/模式/字号/配色/插件变化时整表失效，不再以 version 失效——否则每敲一个字符
     // 整表丢弃、可见行全部重测。失效改由下方按行「内容 + 着色段」比对精确处理（本行被编辑、或上游块标量
@@ -374,11 +385,12 @@ fun CodeEditor(
         if (line < 0 || line >= engine.buffer.lineCount) return null
         if (isGridLine(line)) return null // 网格行不整行测量：绘制走可见列切片（EditorCanvas），几何走等宽算术
         ensureHighlightFresh() // 组合外调用（keep-in-view 等）也先截断状态链，见声明处
+        drainRowSplices() // 同上：行结构变化也须在按行号回填 rowIndex 之前生效
         val version = engine.buffer.version
         val cached = layoutCache[line]
         // 快路：version 未变说明自上次校验以来无编辑 → 行文本与着色必然未变，跳过物化与 O(len) 比较，零分配。
         if (cached != null && cached.validatedVersion == version) {
-            // 命中也回填视觉行数：rowIndex 仍以 lineCount 为 key、行数变化时会重建为 1 行估算，而命中
+            // 命中也回填视觉行数：宽度/换代重建后、以及 splice 落下的新行都还是 1 行估算，而命中
             // 分支不经下面的 setRows，需在此补上，否则软换行的行高/定位会退回估算值。
             if (softWrap) rowIndex.setRows(line, cached.layout.lineCount)
             return cached.layout
@@ -409,8 +421,13 @@ fun CodeEditor(
     }
 
     // 行 -> 顶部像素 / 像素 -> 行（换行走视觉行索引，不换行走平凡公式，行为不变）。
-    fun lineTopPx(line: Int): Float = if (softWrap) rowIndex.rowsBefore(line) * lineHeightPx else line * lineHeightPx
+    fun lineTopPx(line: Int): Float {
+        if (softWrap) drainRowSplices() // 编辑后重组前就可能被读（keep-in-view 等），先把行结构变化落进索引
+        return if (softWrap) rowIndex.rowsBefore(line) * lineHeightPx else line * lineHeightPx
+    }
+
     fun lineAtPx(y: Float): Int {
+        if (softWrap) drainRowSplices()
         val row = (y / lineHeightPx).toInt().coerceAtLeast(0)
         return if (softWrap) rowIndex.lineAtRow(row) else row.coerceIn(0, (lineCount - 1).coerceAtLeast(0))
     }
