@@ -40,14 +40,17 @@ class EditorEngine(initialText: String = "") {
 
     val buffer = TextBuffer()
 
-    var selection: TextRange by mutableStateOf(TextRange.cursor(TextPosition(0, 0)))
-        private set
+    // 方向性选区：start=anchor（固定端）、end=head（活动端），允许无序。必须存方向——归一化会丢失它，
+    // 只存归一化选区时 Shift+左/上 的第二步会塌成光标、无法继续反向扩选（B1）。单一 state 承载而非
+    // anchor/head/selection 三份：selection/caret 皆为派生读，单写点让「selection == normalized(anchor,head)」
+    // 按构造成立，同帧读 selection 与 caret 也不会撕裂（出自同一次快照读取）。
+    private var directional: TextRange by mutableStateOf(TextRange.cursor(TextPosition(0, 0)))
 
-    // 选区的锚点与活动端（head）：方向键 / 拖拽移动的是 head、anchor 固定；selection 恒为二者的归一化视图，
-    // 供渲染 / IME 使用。必须显式存二者——归一化会丢失方向，只靠归一化选区时 Shift+左/上 的第二步会
-    // setSelection(head, head) 塌成光标，无法继续朝反方向扩选（B1）。
-    private var anchor: TextPosition = TextPosition(0, 0)
-    private var head: TextPosition = TextPosition(0, 0)
+    /** 归一化选区（start ≤ end；空选区 = 光标）。快照 state 派生：组合中读取自动订阅。 */
+    val selection: TextRange get() = directional.normalized()
+
+    private val anchor: TextPosition get() = directional.start
+    private val head: TextPosition get() = directional.end
 
     /** 选区活动端（head）：光标闪烁 / keep-in-view 应跟随它。空选区时 head==anchor==光标位置。 */
     val caret: TextPosition get() = head
@@ -167,9 +170,7 @@ class EditorEngine(initialText: String = "") {
             markReplaceDirty(start.line, e.removed, e.inserted)
             buffer.replace(TextRange(start, end), e.inserted)
         }
-        anchor = buffer.positionAt(step.selection.anchor)
-        head = buffer.positionAt(step.selection.head)
-        selection = TextRange(anchor, head).normalized()
+        directional = TextRange(buffer.positionAt(step.selection.anchor), buffer.positionAt(step.selection.head))
         syncHistory()
         maybeNotify()
     }
@@ -328,9 +329,7 @@ class EditorEngine(initialText: String = "") {
         }
         composing = null
         desiredColumn = null
-        anchor = buffer.positionAt(aOff)
-        head = buffer.positionAt(hOff)
-        selection = TextRange(anchor, head).normalized()
+        directional = TextRange(buffer.positionAt(aOff), buffer.positionAt(hOff))
         val selAfter = SelectionState(aOff, hOff)
         history.beginGroup()
         for (edit in edits) history.record(edit, selBefore, selAfter, EditKind.Other)
@@ -349,9 +348,7 @@ class EditorEngine(initialText: String = "") {
     // --- 选择 --------------------------------------------------------------------------------
 
     fun setSelection(a: TextPosition, b: TextPosition, keepComposing: Boolean = false) {
-        anchor = buffer.clamp(a)
-        head = buffer.clamp(b)
-        selection = TextRange(anchor, head).normalized()
+        directional = TextRange(buffer.clamp(a), buffer.clamp(b))
         if (!keepComposing) composing = null
         desiredColumn = null
         history.breakMerge() // 显式定位是语义断点：其后键入不并入此前的输入单元
@@ -362,8 +359,7 @@ class EditorEngine(initialText: String = "") {
 
     /** 保持 anchor 不动、把 head 移到 [to]，选区随之伸缩（Shift+方向键、手柄 / 拖拽扩选、视觉行上下移动）。 */
     fun extendSelectionTo(to: TextPosition) {
-        head = buffer.clamp(to)
-        selection = TextRange(anchor, head).normalized()
+        directional = TextRange(anchor, buffer.clamp(to))
         composing = null
         desiredColumn = null
         history.breakMerge() // 与 setSelection 同理：选区变动后不再并入此前的输入单元
@@ -656,11 +652,9 @@ class EditorEngine(initialText: String = "") {
 
     // --- 内部辅助 ----------------------------------------------------------------------------
 
-    /** 折叠光标到 [p] 并同步 anchor/head：编辑原语把选区收敛为插入点时用（composing/desiredColumn 由调用方清）。 */
+    /** 折叠光标到 [p]：编辑原语把选区收敛为插入点时用（composing/desiredColumn 由调用方清）。 */
     private fun collapseCaret(p: TextPosition) {
-        anchor = p
-        head = p
-        selection = TextRange.cursor(p)
+        directional = TextRange.cursor(p)
     }
 
     private fun cursorAfterInsert(insertStart: TextPosition, newCursorPosition: Int, insertedEnd: TextPosition): TextPosition {
