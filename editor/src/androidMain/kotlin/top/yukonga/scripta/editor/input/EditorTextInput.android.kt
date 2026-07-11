@@ -50,6 +50,11 @@ internal class EditorInputConnection(
     }
 
     override fun commitText(text: CharSequence, newCursorPosition: Int): Boolean {
+        // 有的输入法把回车键发成 commitText("\n")：无预编辑时等同回车键，走缩进继承；
+        // 预编辑中的 "\n" 仍按提交语义处理（结束会话入文），那是会话文本、不是回车键。
+        if (engine.composing == null && text.length == 1 && text[0] == '\n') {
+            engine.insertNewlineAutoIndent(); return true
+        }
         engine.commitText(text.toString(), newCursorPosition); return true
     }
 
@@ -101,7 +106,7 @@ internal class EditorInputConnection(
                 }
 
                 KeyEvent.KEYCODE_ENTER -> {
-                    engine.insert("\n"); return true
+                    engine.insertNewlineAutoIndent(); return true
                 }
 
                 else -> {

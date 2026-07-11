@@ -307,6 +307,20 @@ class EditorEngine(initialText: String = "") {
 
     fun replaceSelection(text: String) = replaceRange(selection, text)
 
+    /**
+     * 回车并继承缩进：把选区替换为「换行 + 新行缩进」，缩进取选区起点行的前导空白（空格/Tab 原样照抄），
+     * 并截断到起点列——光标停在缩进区中间时只继承其左侧部分。整段一次 insert，撤销时连缩进一步回退
+     * （含换行的键入自成单元）。只属回车键语义：粘贴含换行的文本不经此处——逐行补缩进会改坏粘贴内容。
+     */
+    fun insertNewlineAutoIndent() {
+        val start = selStart
+        val lineText = buffer.lineText(start.line)
+        val limit = start.column.coerceIn(0, lineText.length)
+        var i = 0
+        while (i < limit && (lineText[i] == ' ' || lineText[i] == '\t')) i++
+        insert("\n" + lineText.substring(0, i))
+    }
+
     fun commitText(text: String, newCursorPosition: Int) {
         val target = (composing ?: selection).normalized()
         val wasComposing = composing != null

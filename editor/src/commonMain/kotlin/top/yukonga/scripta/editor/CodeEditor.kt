@@ -1113,7 +1113,7 @@ fun CodeEditor(
                         }
 
                         Key.Enter, Key.NumPadEnter -> {
-                            if (!readOnly) engine.insert("\n"); true
+                            if (!readOnly) engine.insertNewlineAutoIndent(); true
                         }
                         // 可编辑时 Tab 插入缩进并消费，防止焦点遍历把焦点带走；只读放行焦点切换。
                         Key.Tab -> if (readOnly) false else {
