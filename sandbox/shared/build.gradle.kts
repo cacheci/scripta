@@ -8,6 +8,11 @@ plugins {
 kotlin {
     jvmToolchain(21)
 
+    // PlatformSeams 刻意使用 expect/actual class（Beta 特性）：压掉每次编译刷出的两条 Beta 提示。
+    compilerOptions {
+        freeCompilerArgs.add("-Xexpect-actual-classes")
+    }
+
     android {
         namespace = "top.yukonga.scripta.sandbox.shared"
         compileSdk {
