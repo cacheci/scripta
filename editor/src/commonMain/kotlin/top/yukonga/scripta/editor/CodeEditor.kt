@@ -1462,11 +1462,13 @@ fun CodeEditor(
                                 caretDragActive = false
                                 handleDragActive = false
                                 caretDragPos = null
-                            } else if (!readOnlyLive.value) {
-                                // 纯点按光标手柄 = 点在光标处，与点文本落光标同语义、同样唤键盘。不唤的话：
-                                // 收键盘后在手柄 4s 窗口内点原光标位，本块吃掉 tap 且每次点击都续手柄计时——
-                                // 键盘永远弹不出来（点按块的唤起调用根本轮不到）。拖拽结束不唤：拖是调整位置。
-                                engine.requestShowKeyboard?.invoke()
+                            } else {
+                                // 纯点按光标手柄 = 点在光标原位，语义与点按块的 onExistingCaret 完全一致，
+                                // 行为也须一致：唤键盘 + 亮粘贴气泡。本块吃掉 down 后点按块整个不跑（含它的
+                                // 唤起与气泡分支），且每次点击都续手柄 4s 计时——不在这补齐的话，手指落在
+                                // 泪滴上的「点原位」永远既不弹键盘也不出操作栏。拖拽结束不做：拖是调整位置。
+                                if (!readOnlyLive.value) engine.requestShowKeyboard?.invoke()
+                                showTouchMenu = true
                             }
                             pingCaretHandle() // 抬手后重置 4s 计时
                         } else {
