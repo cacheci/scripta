@@ -1266,9 +1266,12 @@ fun CodeEditor(
                                 findSession.close(); gotoSession.open()
                             }
 
-                            // 注释前缀来自当前语言的高亮插件（PlainText/无前缀语言 = 不可用、静默无操作）。
+                            // 注释标记来自当前语言的高亮插件：行注释优先，无行注释的语言（HTML 类）退块注释；
+                            // 两者皆无（纯文本）= 静默无操作。
                             EditorKeyCommand.ToggleComment -> if (!readOnlyLive.value) {
-                                resolvedHighlighter?.lineCommentPrefix?.let { engine.toggleLineComment(it) }
+                                val linePrefix = resolvedHighlighter?.lineCommentPrefix
+                                if (linePrefix != null) engine.toggleLineComment(linePrefix)
+                                else resolvedHighlighter?.blockComment?.let { engine.toggleBlockComment(it.open, it.close) }
                             }
 
                             EditorKeyCommand.WordLeft -> engine.moveCaretByWord(-1, shift)

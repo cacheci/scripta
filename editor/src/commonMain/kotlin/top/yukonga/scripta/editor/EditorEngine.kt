@@ -363,6 +363,44 @@ class EditorEngine(initialText: String = "") {
         }
     }
 
+    /**
+     * 块注释切换：无行注释语言（HTML/CSS 类）的注释切换回退。作用区 = 选区触及行中首、末两个非空白行：
+     * 首行内容头带 [open] 且末行内容尾带 [close]（两标记不共享字符）则拆除（连同各自内侧的惯例空格，
+     * 同一空格不被两侧重复认领），否则整块包一层——`"[open] "` 插在首行内容头、`" [close]"` 缀在末行
+     * 内容尾。全空白 no-op；只有半边标记算未包裹，包一层、再切一次恰好还原。一个撤销单元、端点随文本平移。
+     */
+    fun toggleBlockComment(open: String, close: String) {
+        var first = -1
+        var last = -1
+        for (line in affectedLines()) {
+            if (buffer.lineText(line).isBlank()) continue
+            if (first < 0) first = line
+            last = line
+        }
+        if (first < 0) return
+        val firstText = buffer.lineText(first)
+        val lastText = buffer.lineText(last)
+        var i = 0
+        while (i < firstText.length && (firstText[i] == ' ' || firstText[i] == '\t')) i++
+        var j = lastText.length
+        while (j > 0 && (lastText[j - 1] == ' ' || lastText[j - 1] == '\t')) j--
+        val openAt = buffer.offsetAt(TextPosition(first, i))
+        val closeEnd = buffer.offsetAt(TextPosition(last, j))
+        val wrapped = firstText.startsWith(open, i) && lastText.substring(0, j).endsWith(close) &&
+            closeEnd - close.length >= openAt + open.length
+        if (wrapped) {
+            var openEnd = i + open.length
+            if (openEnd < firstText.length && firstText[openEnd] == ' ') openEnd++
+            var closeStart = j - close.length
+            if (closeStart > 0 && lastText[closeStart - 1] == ' ') closeStart--
+            val openEndOff = buffer.offsetAt(TextPosition(first, openEnd))
+            val closeStartOff = maxOf(buffer.offsetAt(TextPosition(last, closeStart)), openEndOff)
+            applyRangeEdits(listOf(Triple(openAt, openEndOff, ""), Triple(closeStartOff, closeEnd, "")))
+        } else {
+            applyRangeEdits(listOf(Triple(openAt, openAt, "$open "), Triple(closeEnd, closeEnd, " $close")))
+        }
+    }
+
     /** 选区触及的行区间；非空选区终点恰在行首时末行不算（选到下一行行首 ≠ 选中那一行）。 */
     private fun affectedLines(): IntRange {
         val s = selStart
@@ -371,32 +409,36 @@ class EditorEngine(initialText: String = "") {
         return s.line..endLine
     }
 
+    /** [applyRangeEdits] 的同文本便捷层：把 [ranges] 全部替换为同一个 [replacement]。 */
+    private fun applyLineStartEdits(ranges: List<Pair<Int, Int>>, replacement: String) =
+        applyRangeEdits(ranges.map { (s, e) -> Triple(s, e, replacement) })
+
     /**
-     * 把 [ranges]（升序、互不重叠的行首编辑区间）全部替换为 [replacement]，一个撤销单元。
+     * 批量区间编辑核心：[edits]（升序、互不重叠的 (start, end, 替换文本)）一次应用，一个撤销单元。
      * 与 [replaceAllOffsetRanges] 的差别在选区语义：不折叠光标，而是把 anchor/head 各自按编辑平移
-     * （落在被删空白内的端点贴回编辑点），保持选区方向与覆盖直觉。
+     * （落在被删区段内的端点贴回编辑点），保持选区方向与覆盖直觉。
      */
-    private fun applyLineStartEdits(ranges: List<Pair<Int, Int>>, replacement: String) {
-        if (ranges.isEmpty()) return
+    private fun applyRangeEdits(edits: List<Triple<Int, Int, String>>) {
+        if (edits.isEmpty()) return
         val selBefore = selectionSnapshot()
         var aOff = selBefore.anchor
         var hOff = selBefore.head
-        for ((s, e) in ranges) { // 平移在原 offset 坐标下累计（每条区间互不重叠，逐条叠加成立）
-            val removed = e - s
-            aOff = shiftForEdit(aOff, s, removed, replacement.length)
+        for ((s, e, replacement) in edits.asReversed()) { // 平移降序累计：晚区间先算，端点与各区间起点的比较
+            val removed = e - s                           // 都在原 offset 坐标下成立——升序会让早区间的净增把
+            aOff = shiftForEdit(aOff, s, removed, replacement.length) // 两区间之间的端点数值推过晚区间起点、多算一次
             hOff = shiftForEdit(hOff, s, removed, replacement.length)
         }
-        val edits = ArrayList<TextEdit>(ranges.size)
-        for ((s, e) in ranges.asReversed()) { // 降序应用：前面区间的 offset 不受影响
+        val applied = ArrayList<TextEdit>(edits.size)
+        for ((s, e, replacement) in edits.asReversed()) { // 降序应用：前面区间的 offset 不受影响
             val (edit, _) = replaceCollecting(TextRange(buffer.positionAt(s), buffer.positionAt(e)), replacement)
-            edits.add(edit)
+            applied.add(edit)
         }
         composing = null
         desiredColumn = null
         directional = TextRange(buffer.positionAt(aOff), buffer.positionAt(hOff))
         val selAfter = SelectionState(aOff, hOff)
         history.beginGroup()
-        for (edit in edits) history.record(edit, selBefore, selAfter, EditKind.Other)
+        for (edit in applied) history.record(edit, selBefore, selAfter, EditKind.Other)
         history.endGroup()
         syncHistory()
         maybeNotify()

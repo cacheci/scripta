@@ -41,6 +41,17 @@ class EditorEngineIndentTest {
     }
 
     @Test
+    fun indentKeepsEndOfLineAnchorOnItsOwnLine() {
+        // 行尾端点只吃本行插入的平移：早行的净增不得把它推过下一行行首、误吞下一行的平移量。
+        val e = EditorEngine("aaa\nbbb")
+        e.setSelection(TextPosition(0, 3), TextPosition(1, 3))
+        e.indentSelectedLines()
+        assertEquals("    aaa\n    bbb", e.getText())
+        assertEquals(TextPosition(0, 7), e.selStart)
+        assertEquals(TextPosition(1, 7), e.selEnd)
+    }
+
+    @Test
     fun indentExcludesLineWhereSelectionEndsAtColumnZero() {
         val e = EditorEngine("a\nb\nc")
         e.setSelection(TextPosition(0, 0), TextPosition(2, 0)) // 终点在 L2 行首：L2 不算选中

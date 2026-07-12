@@ -107,4 +107,15 @@ class EditorEngineToggleCommentTest {
         assertEquals(TextPosition(0, 3), e.selStart)
         assertEquals(TextPosition(1, 4), e.selEnd)
     }
+
+    @Test
+    fun endOfLineAnchorStaysOnItsOwnLine() {
+        // 行尾端点只吃本行前缀的平移：早行的净增不得把它推过下一行行首、误吞下一行的平移量。
+        val e = EditorEngine("aa\nbb")
+        e.setSelection(TextPosition(0, 2), TextPosition(1, 2))
+        e.toggleLineComment("#")
+        assertEquals("# aa\n# bb", e.getText())
+        assertEquals(TextPosition(0, 4), e.selStart)
+        assertEquals(TextPosition(1, 4), e.selEnd)
+    }
 }

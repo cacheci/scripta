@@ -31,6 +31,9 @@ fun clipSpansToWindow(spans: List<HighlightSpan>, from: Int, until: Int): List<H
     return out
 }
 
+/** 块注释开闭标记对（如 HTML 的 `<!--` / `-->`）。 */
+data class BlockComment(val open: String, val close: String)
+
 /**
  * 行进入 / 退出状态：跨行结构（块标量、多行字符串等）经它在行间传递。实现须为不可变值类型
  * （结构相等）——缓存靠「内容 + 进入状态相等」判断可否复用上次分词结果。
@@ -48,8 +51,11 @@ interface SyntaxHighlighter {
     /** 文档首行的进入状态；通常 null（无跨行结构）。 */
     val initialState: LineState? get() = null
 
-    /** 本语言的行注释前缀（注释切换 Ctrl+/ 用，如 YAML 的 `#`）；null = 无行注释、切换不可用。 */
+    /** 本语言的行注释前缀（注释切换 Ctrl+/ 用，如 YAML 的 `#`）；null = 无行注释、切换回退到 [blockComment]。 */
     val lineCommentPrefix: String? get() = null
+
+    /** 本语言的块注释标记（无行注释语言的注释切换回退，如 HTML 的 `<!-- -->`）；null = 无块注释。 */
+    val blockComment: BlockComment? get() = null
 
     fun highlightLine(text: String, entryState: LineState?): LineHighlight
 }
