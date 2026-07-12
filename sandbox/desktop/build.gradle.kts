@@ -20,5 +20,10 @@ kotlin {
 compose.desktop {
     application {
         mainClass = "top.yukonga.scripta.sandbox.MainKt"
+
+        nativeDistributions {
+            packageName = "scripta"
+            packageVersion = "0.1.0"
+        }
     }
 }
