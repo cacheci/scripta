@@ -50,6 +50,9 @@ data class EditorColors(
     /** 无选区时当前行的整行底色。带默认值（与深色 gutter 同值，沿用旧视觉），不破坏既有构造。 */
     val currentLine: Color = Color(0xFF252526),
 
+    /** 匹配括号底色：光标邻接 `()[]{}` 时点亮该括号及其配对方。半透明中性灰、双主题通用。 */
+    val bracketMatch: Color = Color(0x4D909090),
+
     /** 滚动条 thumb（静止指示态）。半透明中性灰：深/浅底上都可辨，默认即适配双主题。 */
     val scrollbarThumb: Color = Color(0x66808080),
 

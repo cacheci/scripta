@@ -1,9 +1,9 @@
 package top.yukonga.scripta.editor
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.focusable
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.background
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.awaitTouchSlopOrCancellation
@@ -62,7 +62,6 @@ import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.PointerType
 import androidx.compose.ui.input.pointer.isPrimaryPressed
 import androidx.compose.ui.input.pointer.isSecondaryPressed
-import androidx.compose.ui.input.pointer.isShiftPressed as isKeyboardShiftPressed
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -107,11 +106,13 @@ import top.yukonga.scripta.editor.render.ScrollbarMath
 import top.yukonga.scripta.editor.render.ScrollbarOverlay
 import top.yukonga.scripta.editor.render.VisualRowIndex
 import top.yukonga.scripta.editor.render.ZoomMath
+import top.yukonga.scripta.editor.text.BracketMatcher
 import top.yukonga.scripta.editor.text.TextPosition
 import top.yukonga.scripta.editor.text.TextRange
 import kotlin.math.abs
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.TimeSource
+import androidx.compose.ui.input.pointer.isShiftPressed as isKeyboardShiftPressed
 
 /** 超过此字符数的行走「网格」快路：不整行 shaping，只按可见列窗口等宽算术定位/绘制（M2，仅不换行）。 */
 private const val LONG_LINE_THRESHOLD = 2000
@@ -225,6 +226,15 @@ fun CodeEditor(
     val findSession = controller.find
     val gotoSession = controller.gotoLine
     engine.autoClosePairs = autoClosePairs // 键入路径读引擎字段（非 state），组合期同步参数即可
+
+    // 匹配括号：光标邻接 ()[]{} 时点亮该括号与配对方。derivedState 依赖 caret（选区 state 派生）与
+    // 文档版本（编辑改配对），扫描有界（BracketMatcher 预算）；draw 阶段读值——光标移动只重绘不重组。
+    val bracketMatchState = remember(engine) {
+        derivedStateOf {
+            engine.buffer.version
+            BracketMatcher.findMatch(engine.buffer, engine.caret)
+        }
+    }
 
     // 查找结果重算：可见性 / 查询串 / 三个开关 / 文档版本任一变化即重算（snapshotFlow 只订阅这些读取，
     // 不牵动本可组合重组）。列表做结构比较，去掉纯粹的重复快照。
@@ -397,6 +407,7 @@ fun CodeEditor(
     val rowIndex = remember(softWrap, widthBucket, engine.contentGeneration) {
         VisualRowIndex(if (softWrap) engine.buffer.lineCount else 1).also { engine.consumeLineSplices() }
     }
+
     // 编辑后、任何按行号读几何之前，先把积压的行结构变化应用到行索引。组合本身与组合外路径都要经过
     // （layoutFor / lineTopPx / lineAtPx——keep-in-view 收集器、边缘自动滚动会在编辑后、重组前就读几何）。
     // 非换行模式索引恒 size-1、从不读，但仍消费队列防积压。空队列时只是一次 isEmpty 检查，热路径可担。
@@ -413,6 +424,7 @@ fun CodeEditor(
     val layoutCache = remember(engine, softWrap, widthBucket, fontSizeSp, colors, resolvedHighlighter) {
         LruCache<Int, CachedLayout>(4096)
     }
+
     fun layoutFor(line: Int): TextLayoutResult? {
         if (line < 0 || line >= engine.buffer.lineCount) return null
         if (isGridLine(line)) return null // 网格行不整行测量：绘制走可见列切片（EditorCanvas），几何走等宽算术
@@ -867,6 +879,7 @@ fun CodeEditor(
             val r = caretRectLive.value(at) ?: return false
             return EditorGeometry.handleGeometry(kind, r[0], r[1], r[2], handleRadiusPx, handleSlopPx).hitContains(p.x, p.y)
         }
+
         val sel = engine.selection
         return if (!sel.isEmpty) {
             hit(HandleKind.SelectionEnd, sel.end) || hit(HandleKind.SelectionStart, sel.start)
@@ -1539,7 +1552,7 @@ fun CodeEditor(
                         // 点击计数：与上次点击「时间差 ≤ 双击超时」且「位移 ≤ touchSlop」则累加，否则归 1；>3 回绕到 1。
                         val now = down.uptimeMillis
                         val within = (now - lastClickTime) <= viewConfiguration.doubleTapTimeoutMillis &&
-                            (downPos - lastClickPos).getDistance() <= viewConfiguration.touchSlop
+                                (downPos - lastClickPos).getDistance() <= viewConfiguration.touchSlop
                         clickCount = if (within) clickCount + 1 else 1
                         if (clickCount > 3) clickCount = 1
                         lastClickTime = now
@@ -1745,6 +1758,7 @@ fun CodeEditor(
                 // 查找命中高亮（draw 阶段读 session 的行索引表与当前命中下标，重算即重绘、不重组）。
                 findSpansForLine = findSession::spansForLine,
                 activeFindIndex = { findSession.activeIndex },
+                bracketMatch = { bracketMatchState.value },
                 highlightCache = highlightCache,
                 // 缩放预览的运行态仿射（draw 阶段读）：previewScale 连续缩放系数、previewTx/previewTy 两轴平移（屏幕 px）。手势逐帧按
                 // 「绕当前双指中点缩放 + 中点位移平移」增量累积 → 四向自由跟手；换行下 previewTx 恒 0（正文/gutter 钉左）。恒 (1,0,0) 逐像素等价原状。

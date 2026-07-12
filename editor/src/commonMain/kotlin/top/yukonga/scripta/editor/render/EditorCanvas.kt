@@ -48,6 +48,7 @@ import top.yukonga.scripta.editor.highlight.HighlightCache
 import top.yukonga.scripta.editor.highlight.SyntaxColors
 import top.yukonga.scripta.editor.highlight.clipSpansToWindow
 import top.yukonga.scripta.editor.highlight.highlightedText
+import top.yukonga.scripta.editor.text.BracketPair
 import top.yukonga.scripta.editor.text.TextPosition
 import top.yukonga.scripta.editor.text.TextRange
 import kotlin.math.PI
@@ -155,6 +156,8 @@ fun EditorCanvas(
     gridRefCursorBottom: Float,
     findSpansForLine: (Int) -> List<FindSpan> = { emptyList() },
     activeFindIndex: () -> Int = { -1 },
+    // 匹配括号（光标邻接括号时的两个单字符位置）：draw 读 derivedState——光标动只重绘、不重组。
+    bracketMatch: () -> BracketPair? = { null },
     // 语法高亮状态链（null = 无高亮）：网格长行的可见列切片据此取着色段。draw 恒在同帧组合之后，
     // 组合里的 ensureHighlightFresh 已截断状态链，这里直接取即可。
     highlightCache: HighlightCache? = null,
@@ -246,6 +249,15 @@ fun EditorCanvas(
                                 )
                             }
                         }
+                        // 匹配括号底色：网格行同走等宽算术（单字符格）。
+                        bracketMatch()?.let { bm ->
+                            if (bm.open.line == line && bm.open.column < lineLen) {
+                                drawRect(colors.bracketMatch, topLeft = Offset(textX + bm.open.column * charW, top), size = Size(charW, h))
+                            }
+                            if (bm.close.line == line && bm.close.column < lineLen) {
+                                drawRect(colors.bracketMatch, topLeft = Offset(textX + bm.close.column * charW, top), size = Size(charW, h))
+                            }
+                        }
                         if (!sel.isEmpty && line >= sel.start.line && line <= sel.end.line) {
                             val cS = if (line == sel.start.line) sel.start.column else 0
                             val cE = if (line == sel.end.line) sel.end.column else lineLen
@@ -317,6 +329,19 @@ fun EditorCanvas(
                                 drawPath(p, if (sp.matchIndex == act) colors.findMatchActive else colors.findMatch)
                             }
                         }
+                    }
+                    // 匹配括号底色：单字符 range path，与查找同式（softWrap 折行几何由 layout 兜住）。
+                    bracketMatch()?.let { bm ->
+                        val lineLen = engine.buffer.lineLength(line)
+                        fun drawBracketAt(col: Int) {
+                            if (col < lineLen) {
+                                val p = layout.getPathForRange(col, col + 1)
+                                p.translate(Offset(textX, top))
+                                drawPath(p, colors.bracketMatch)
+                            }
+                        }
+                        if (bm.open.line == line) drawBracketAt(bm.open.column)
+                        if (bm.close.line == line) drawBracketAt(bm.close.column)
                     }
                     // 选区底色纵向锚到固定行栅格 top（非 textTop）：须行行相接铺满不重叠——跟随 textTop（各行基线平移不一）会交叠。
                     if (!sel.isEmpty && line >= sel.start.line && line <= sel.end.line) {
@@ -690,154 +715,169 @@ fun MagnifierOverlay(
                         .size(MAGNIFIER_WIDTH + MAGNIFIER_POPUP_PAD * 2, MAGNIFIER_HEIGHT + MAGNIFIER_POPUP_PAD * 2)
                         .graphicsLayer { this.alpha = alpha.value },
                 ) {
-                // ① 悬浮投影：胶囊形 dropShadow，画在玻璃层之下（首个子节点）。
-                Box(
-                    Modifier
-                        .offset(MAGNIFIER_POPUP_PAD, MAGNIFIER_POPUP_PAD)
-                        .size(MAGNIFIER_WIDTH, MAGNIFIER_HEIGHT)
-                        .dropShadow(
-                            shape = RoundedCornerShape(percent = 50),
-                            shadow = Shadow(
-                                radius = MAGNIFIER_DROP_RADIUS,
-                                spread = 0.dp,
-                                color = Color.Black.copy(alpha = MAGNIFIER_DROP_ALPHA),
-                                offset = DpOffset(0.dp, MAGNIFIER_DROP_DY),
+                    // ① 悬浮投影：胶囊形 dropShadow，画在玻璃层之下（首个子节点）。
+                    Box(
+                        Modifier
+                            .offset(MAGNIFIER_POPUP_PAD, MAGNIFIER_POPUP_PAD)
+                            .size(MAGNIFIER_WIDTH, MAGNIFIER_HEIGHT)
+                            .dropShadow(
+                                shape = RoundedCornerShape(percent = 50),
+                                shadow = Shadow(
+                                    radius = MAGNIFIER_DROP_RADIUS,
+                                    spread = 0.dp,
+                                    color = Color.Black.copy(alpha = MAGNIFIER_DROP_ALPHA),
+                                    offset = DpOffset(0.dp, MAGNIFIER_DROP_DY),
+                                ),
                             ),
-                        ),
-                )
-                Canvas(
-                    Modifier
-                        .size(MAGNIFIER_WIDTH + MAGNIFIER_POPUP_PAD * 2, MAGNIFIER_HEIGHT + MAGNIFIER_POPUP_PAD * 2)
-                        .graphicsLayer {
-                            renderEffect = glassEffect // 恒定：胶囊在图层内固定位置，uniform 不变、只建一次；alpha 由最外 wrapping 层统一施加
-                        }
-                ) {
-                    val g = computeLoupe(this) ?: return@Canvas
-                    val m = MAGNIFIER_SCALE
-                    val pad = MAGNIFIER_POPUP_PAD.toPx()
-                    val wl = MAGNIFIER_WIDTH.toPx()
-                    val hl = MAGNIFIER_HEIGHT.toPx()
-                    val radius = g.radius
-                    val sY = scrollY()
-                    val textX = gutterWidthPx + padXPx - scrollX()
-                    val sel = engine.selection // 有选区（拖端点）→ 画选区底色、不画光标；空选区（拖光标）→ 画随 blink 的光标
-                    val loupeRect = Rect(pad, pad, pad + wl, pad + hl) // Popup 内容局部坐标（胶囊固定于此、玻璃 uniform 与之对齐）
+                    )
+                    Canvas(
+                        Modifier
+                            .size(MAGNIFIER_WIDTH + MAGNIFIER_POPUP_PAD * 2, MAGNIFIER_HEIGHT + MAGNIFIER_POPUP_PAD * 2)
+                            .graphicsLayer {
+                                renderEffect = glassEffect // 恒定：胶囊在图层内固定位置，uniform 不变、只建一次；alpha 由最外 wrapping 层统一施加
+                            }
+                    ) {
+                        val g = computeLoupe(this) ?: return@Canvas
+                        val m = MAGNIFIER_SCALE
+                        val pad = MAGNIFIER_POPUP_PAD.toPx()
+                        val wl = MAGNIFIER_WIDTH.toPx()
+                        val hl = MAGNIFIER_HEIGHT.toPx()
+                        val radius = g.radius
+                        val sY = scrollY()
+                        val textX = gutterWidthPx + padXPx - scrollX()
+                        val sel = engine.selection // 有选区（拖端点）→ 画选区底色、不画光标；空选区（拖光标）→ 画随 blink 的光标
+                        val loupeRect = Rect(pad, pad, pad + wl, pad + hl) // Popup 内容局部坐标（胶囊固定于此、玻璃 uniform 与之对齐）
 
-                    // 悬浮投影不在此画：已移到玻璃层【之下】的真·dropShadow（见 Popup 内容第 ① 层），更大更柔、浮得更高。
-                    val clip = Path().apply { addRoundRect(RoundRect(loupeRect, CornerRadius(radius, radius))) }
-                    clipPath(clip) {
-                        drawRect(colors.background, topLeft = loupeRect.topLeft, size = loupeRect.size)
-                        // 放大变换：编辑器局部内容点 (ex,ey) → Popup 内胶囊中心 (pad+wl/2, pad+hl/2)，绕连续参考点 (refX,refY) 放大 m。
-                        withTransform({
-                            translate((pad + wl / 2f) - m * g.refX, (pad + hl / 2f) - m * g.refY)
-                            scale(m, m, Offset.Zero)
-                        }) {
-                            val lineCount = engine.buffer.lineCount
-                            val first = (g.cLine - 2).coerceAtLeast(0)
-                            val last = (g.cLine + 2).coerceAtMost(lineCount - 1)
-                            var ln = first
-                            while (ln <= last) {
-                                val lineTop = lineTopPx(ln) - sY
-                                // 选区底色（在正文下）：与 EditorCanvas 同式——本行落在 [sel.start.line, sel.end.line] 内即画首/末列间的高亮，
-                                // 非末行再补一小段行尾换行位。网格行走等宽矩形、其余走 layout 的 range path。
-                                val inSel = !sel.isEmpty && ln >= sel.start.line && ln <= sel.end.line
-                                if (isGridLine(ln)) {
-                                    val textTop = lineTop + (refBaselinePx - gridRefBaseline)
-                                    val len = engine.buffer.lineLength(ln)
-                                    if (inSel) {
-                                        val cS = if (ln == sel.start.line) sel.start.column else 0
-                                        val cE = if (ln == sel.end.line) sel.end.column else len
-                                        if (cE > cS) drawRect(
-                                            colors.selection,
-                                            topLeft = Offset(textX + cS * charW, lineTop),
-                                            size = Size((cE - cS) * charW, lineHeightPx)
-                                        )
-                                        if (ln != sel.end.line) drawRect(
-                                            colors.selection,
-                                            topLeft = Offset(textX + len * charW, lineTop),
-                                            size = Size(lineHeightPx * 0.4f, lineHeightPx)
-                                        )
-                                    }
-                                    val c0 = (g.col - 24).coerceIn(0, len)
-                                    val c1 = (g.col + 24).coerceIn(0, len)
-                                    if (c1 > c0) {
-                                        // 与主画布同源：切片带语法着色（放大镜逐帧重测，单行 ≤ 上限的重扫是微秒级）。
-                                        val sl = measureGridSlice(engine, textMeasurer, textStyle, colors.syntax, highlightCache, ln, c0, c1)
-                                        drawText(sl, topLeft = Offset(textX + c0 * charW, textTop))
-                                    }
-                                } else {
-                                    val layout = layoutFor(ln)
-                                    if (layout != null) {
-                                        val textTop = lineTop + (refBaselinePx - layout.firstBaseline)
+                        // 悬浮投影不在此画：已移到玻璃层【之下】的真·dropShadow（见 Popup 内容第 ① 层），更大更柔、浮得更高。
+                        val clip = Path().apply { addRoundRect(RoundRect(loupeRect, CornerRadius(radius, radius))) }
+                        clipPath(clip) {
+                            drawRect(colors.background, topLeft = loupeRect.topLeft, size = loupeRect.size)
+                            // 放大变换：编辑器局部内容点 (ex,ey) → Popup 内胶囊中心 (pad+wl/2, pad+hl/2)，绕连续参考点 (refX,refY) 放大 m。
+                            withTransform({
+                                translate((pad + wl / 2f) - m * g.refX, (pad + hl / 2f) - m * g.refY)
+                                scale(m, m, Offset.Zero)
+                            }) {
+                                val lineCount = engine.buffer.lineCount
+                                val first = (g.cLine - 2).coerceAtLeast(0)
+                                val last = (g.cLine + 2).coerceAtMost(lineCount - 1)
+                                var ln = first
+                                while (ln <= last) {
+                                    val lineTop = lineTopPx(ln) - sY
+                                    // 选区底色（在正文下）：与 EditorCanvas 同式——本行落在 [sel.start.line, sel.end.line] 内即画首/末列间的高亮，
+                                    // 非末行再补一小段行尾换行位。网格行走等宽矩形、其余走 layout 的 range path。
+                                    val inSel = !sel.isEmpty && ln >= sel.start.line && ln <= sel.end.line
+                                    if (isGridLine(ln)) {
+                                        val textTop = lineTop + (refBaselinePx - gridRefBaseline)
+                                        val len = engine.buffer.lineLength(ln)
                                         if (inSel) {
-                                            val len = engine.buffer.lineLength(ln)
                                             val cS = if (ln == sel.start.line) sel.start.column else 0
                                             val cE = if (ln == sel.end.line) sel.end.column else len
-                                            if (cE > cS) {
-                                                val path = layout.getPathForRange(cS, cE)
-                                                path.translate(Offset(textX, lineTop)) // 选区底色锚固定行栅格（同主画布），不随基线平移
-                                                drawPath(path, colors.selection)
-                                            }
-                                            if (ln != sel.end.line) {
-                                                val cr = layout.getCursorRect(len)
-                                                drawRect(
-                                                    colors.selection,
-                                                    topLeft = Offset(textX + cr.left, lineTop),
-                                                    size = Size(lineHeightPx * 0.4f, lineHeightPx)
-                                                )
-                                            }
+                                            if (cE > cS) drawRect(
+                                                colors.selection,
+                                                topLeft = Offset(textX + cS * charW, lineTop),
+                                                size = Size((cE - cS) * charW, lineHeightPx)
+                                            )
+                                            if (ln != sel.end.line) drawRect(
+                                                colors.selection,
+                                                topLeft = Offset(textX + len * charW, lineTop),
+                                                size = Size(lineHeightPx * 0.4f, lineHeightPx)
+                                            )
                                         }
-                                        // 不传 color：镜内正文沿用 layout 自带的语法高亮色，与主画布一致。
-                                        drawText(layout, topLeft = Offset(textX, textTop))
+                                        val c0 = (g.col - 24).coerceIn(0, len)
+                                        val c1 = (g.col + 24).coerceIn(0, len)
+                                        if (c1 > c0) {
+                                            // 与主画布同源：切片带语法着色（放大镜逐帧重测，单行 ≤ 上限的重扫是微秒级）。
+                                            val sl =
+                                                measureGridSlice(engine, textMeasurer, textStyle, colors.syntax, highlightCache, ln, c0, c1)
+                                            drawText(sl, topLeft = Offset(textX + c0 * charW, textTop))
+                                        }
+                                    } else {
+                                        val layout = layoutFor(ln)
+                                        if (layout != null) {
+                                            val textTop = lineTop + (refBaselinePx - layout.firstBaseline)
+                                            if (inSel) {
+                                                val len = engine.buffer.lineLength(ln)
+                                                val cS = if (ln == sel.start.line) sel.start.column else 0
+                                                val cE = if (ln == sel.end.line) sel.end.column else len
+                                                if (cE > cS) {
+                                                    val path = layout.getPathForRange(cS, cE)
+                                                    path.translate(Offset(textX, lineTop)) // 选区底色锚固定行栅格（同主画布），不随基线平移
+                                                    drawPath(path, colors.selection)
+                                                }
+                                                if (ln != sel.end.line) {
+                                                    val cr = layout.getCursorRect(len)
+                                                    drawRect(
+                                                        colors.selection,
+                                                        topLeft = Offset(textX + cr.left, lineTop),
+                                                        size = Size(lineHeightPx * 0.4f, lineHeightPx)
+                                                    )
+                                                }
+                                            }
+                                            // 不传 color：镜内正文沿用 layout 自带的语法高亮色，与主画布一致。
+                                            drawText(layout, topLeft = Offset(textX, textTop))
+                                        }
+                                    }
+                                    ln++
+                                }
+                                // 行号 gutter（编辑器局部坐标 = 主画布屏幕坐标，随内容一同放大）：正文之后铺不透明底色条 [0, gutterWidth]、
+                                // 行号右对齐、基线对齐正文基线——与主画布同式。画在正文之后 ⇒ 横滚时盖住滚进 gutter 区的正文。放大镜是绕光标
+                                // 的窗口，仅光标靠行首时 gutter 落入镜窗、自然可见（滚到行中时 gutter 在窗外、不画，符合「放大邻域」语义）。
+                                run {
+                                    val gTop = lineTopPx(first) - sY
+                                    val gBot = lineTopPx(last) - sY + lineHeightPx
+                                    drawRect(colors.gutterBackground, topLeft = Offset(0f, gTop), size = Size(gutterWidthPx, gBot - gTop))
+                                    var gln = first
+                                    while (gln <= last) {
+                                        val lt = lineTopPx(gln) - sY
+                                        val num = textMeasurer.measure((gln + 1).toString(), numberStyle)
+                                        val numTop = lt + (refBaselinePx - num.firstBaseline)
+                                        drawText(
+                                            num,
+                                            color = colors.gutterForeground,
+                                            topLeft = Offset(gutterWidthPx - padXPx - num.size.width, numTop)
+                                        )
+                                        gln++
                                     }
                                 }
-                                ln++
-                            }
-                            // 行号 gutter（编辑器局部坐标 = 主画布屏幕坐标，随内容一同放大）：正文之后铺不透明底色条 [0, gutterWidth]、
-                            // 行号右对齐、基线对齐正文基线——与主画布同式。画在正文之后 ⇒ 横滚时盖住滚进 gutter 区的正文。放大镜是绕光标
-                            // 的窗口，仅光标靠行首时 gutter 落入镜窗、自然可见（滚到行中时 gutter 在窗外、不画，符合「放大邻域」语义）。
-                            run {
-                                val gTop = lineTopPx(first) - sY
-                                val gBot = lineTopPx(last) - sY + lineHeightPx
-                                drawRect(colors.gutterBackground, topLeft = Offset(0f, gTop), size = Size(gutterWidthPx, gBot - gTop))
-                                var gln = first
-                                while (gln <= last) {
-                                    val lt = lineTopPx(gln) - sY
-                                    val num = textMeasurer.measure((gln + 1).toString(), numberStyle)
-                                    val numTop = lt + (refBaselinePx - num.firstBaseline)
-                                    drawText(num, color = colors.gutterForeground, topLeft = Offset(gutterWidthPx - padXPx - num.size.width, numTop))
-                                    gln++
+                                // 光标线：仅空选区（拖光标手柄）时画，且随 blink（caretVisible）闪烁；有选区（拖端点）时不画、端点由选区边缘体现。
+                                if (sel.isEmpty && caretVisible()) {
+                                    drawLine(
+                                        colors.cursor,
+                                        Offset(g.caretX, g.caretTopY),
+                                        Offset(g.caretX, g.caretBotY),
+                                        strokeWidth = 1.6f
+                                    )
                                 }
                             }
-                            // 光标线：仅空选区（拖光标手柄）时画，且随 blink（caretVisible）闪烁；有选区（拖端点）时不画、端点由选区边缘体现。
-                            if (sel.isEmpty && caretVisible()) {
-                                drawLine(colors.cursor, Offset(g.caretX, g.caretTopY), Offset(g.caretX, g.caretBotY), strokeWidth = 1.6f)
-                            }
+                            // 内阴影不在此画：已移到玻璃层【之上】的 innerShadow overlay（不被折射、不与玻璃折射 rim 打架）——见下方 Popup 内容第二层。
                         }
-                        // 内阴影不在此画：已移到玻璃层【之上】的 innerShadow overlay（不被折射、不与玻璃折射 rim 打架）——见下方 Popup 内容第二层。
+                        // 边框：仅无液态玻璃边的平台画（玻璃 rim 已界定边缘；有玻璃时再画硬描边会与折射 rim 打架）。
+                        if (!glassSupported) {
+                            drawRoundRect(
+                                color = colors.gutterForeground.copy(alpha = 0.35f),
+                                topLeft = loupeRect.topLeft,
+                                size = loupeRect.size,
+                                cornerRadius = CornerRadius(radius, radius),
+                                style = Stroke(width = MAGNIFIER_BORDER.toPx()),
+                            )
+                        }
                     }
-                    // 边框：仅无液态玻璃边的平台画（玻璃 rim 已界定边缘；有玻璃时再画硬描边会与折射 rim 打架）。
-                    if (!glassSupported) {
-                        drawRoundRect(
-                            color = colors.gutterForeground.copy(alpha = 0.35f),
-                            topLeft = loupeRect.topLeft,
-                            size = loupeRect.size,
-                            cornerRadius = CornerRadius(radius, radius),
-                            style = Stroke(width = MAGNIFIER_BORDER.toPx()),
-                        )
-                    }
-                }
-                // ③ 玻璃质感 overlay：只留一层 innerShadow 收边。玻璃的"鼓起"改由折射 shader 的 depthEffect 提供（见 magnifierGlassRenderEffect）——
-                // overlay 不再画渐变/rim（那些盖在正文上的手绘光看着不自然，已撤）。
-                Box(
-                    Modifier
-                        .offset(MAGNIFIER_POPUP_PAD, MAGNIFIER_POPUP_PAD)
-                        .size(MAGNIFIER_WIDTH, MAGNIFIER_HEIGHT)
-                        .innerShadow(
-                            shape = RoundedCornerShape(percent = 50),
-                            shadow = Shadow(radius = 14.dp, spread = 0.dp, color = Color.Black.copy(alpha = 0.25f), offset = DpOffset(0.dp, 1.dp)),
-                        ),
-                )
+                    // ③ 玻璃质感 overlay：只留一层 innerShadow 收边。玻璃的"鼓起"改由折射 shader 的 depthEffect 提供（见 magnifierGlassRenderEffect）——
+                    // overlay 不再画渐变/rim（那些盖在正文上的手绘光看着不自然，已撤）。
+                    Box(
+                        Modifier
+                            .offset(MAGNIFIER_POPUP_PAD, MAGNIFIER_POPUP_PAD)
+                            .size(MAGNIFIER_WIDTH, MAGNIFIER_HEIGHT)
+                            .innerShadow(
+                                shape = RoundedCornerShape(percent = 50),
+                                shadow = Shadow(
+                                    radius = 14.dp,
+                                    spread = 0.dp,
+                                    color = Color.Black.copy(alpha = 0.25f),
+                                    offset = DpOffset(0.dp, 1.dp)
+                                ),
+                            ),
+                    )
                 }
             }
         }
