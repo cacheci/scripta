@@ -1462,6 +1462,11 @@ fun CodeEditor(
                                 caretDragActive = false
                                 handleDragActive = false
                                 caretDragPos = null
+                            } else if (!readOnlyLive.value) {
+                                // 纯点按光标手柄 = 点在光标处，与点文本落光标同语义、同样唤键盘。不唤的话：
+                                // 收键盘后在手柄 4s 窗口内点原光标位，本块吃掉 tap 且每次点击都续手柄计时——
+                                // 键盘永远弹不出来（点按块的唤起调用根本轮不到）。拖拽结束不唤：拖是调整位置。
+                                engine.requestShowKeyboard?.invoke()
                             }
                             pingCaretHandle() // 抬手后重置 4s 计时
                         } else {
