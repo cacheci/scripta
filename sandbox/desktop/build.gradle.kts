@@ -23,7 +23,7 @@ compose.desktop {
 
         nativeDistributions {
             packageName = "scripta"
-            packageVersion = "0.1.0"
+            packageVersion = "1.0.0"
         }
     }
 }
