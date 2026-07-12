@@ -1744,8 +1744,6 @@ fun CodeEditor(
                 bubbleLine = { scrollbarBubbleLine.value },
                 scrollY = { scrollY.coerceIn(0f, maxScrollY) },
                 maxScrollY = { liveMaxScrollY.value },
-                scrollX = { scrollX.coerceIn(0f, maxScrollX) },
-                maxScrollX = { liveMaxScrollX.value },
                 minThumbPx = with(density) { SCROLLBAR_MIN_THUMB.toPx() },
                 modifier = Modifier.fillMaxSize(),
             )
