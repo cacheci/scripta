@@ -761,26 +761,36 @@ fun CodeEditor(
     LaunchedEffect(engine) {
         // revealTick 必须进发射值：snapshotFlow 按结构相等去重，编程定位跳到「原地」（重复点同一 lint
         // 错误、goto 跳当前行）时 selection 不变、只有 tick 在动——不进值就不发射、视口滚不回来。
+        var first = true
         var lastSel = engine.selection
         var lastTick = engine.revealTick
+        var lastVh = viewportHeight
+        var lastVw = viewportWidth
         snapshotFlow {
             listOf(engine.revealTick, engine.selection, viewportHeight, viewportWidth, selectionDragActive || caretDragActive)
         }.collect {
-            if (viewportHeight <= 0f) return@collect
+            if (viewportHeight <= 0f) return@collect // 尺寸未定不消费 first：等真实尺寸那次再算首发
             if (selectionDragActive || caretDragActive) return@collect // 选区/光标手柄拖拽时由边缘自动滚动接管
-            // 分辨发射原因：selection/tick 有变 = 用户/宿主的显式动作，无条件露出；两者都没变 = 纯视口
-            // 尺寸变化（收/弹键盘的多帧 insets 动画会逐帧发射）。**滚动进行中的纯视口变化不露出**——收键盘
-            // 时光标多半已被 fling/拖动滚出屏外，逐帧把 scrollY 拽回光标处会与滚动回调交替竞写、剧烈抽搐
-            //（与 re-clamp 效应同一场景里的第二个写者，fling 中比它抽得更凶）；静止时收/弹键盘照旧把光标
-            // 顶回可见区，显式动作（编辑/方向键/跳转）照旧打断滚动并露出。
+            // 分辨发射原因。显式动作（selection/tick 有变，或首发——恢复的深处光标靠首发露出）无条件
+            // 露出，编辑/方向键/跳转照旧打断滚动。纯视口尺寸变化只在「缩小」时露出：弹键盘可能盖住光标、
+            // 须顶回可见区；「变大」（收键盘）不遮挡任何已见内容，一律不露——否则滚动中收键盘、fling 触底
+            // 停下后，键盘 insets 动画的尾帧发射（滚动静默窗已过、拦不住）会把刚滚到的视口整个拽回光标处
+            //（跳回原位）。缩小动画与滚动并发时（弹键盘瞬间仍在 fling）仍由静默窗拦住竞写。
             val sel = engine.selection
             val tick = engine.revealTick
-            val explicit = sel != lastSel || tick != lastTick
+            val explicit = first || sel != lastSel || tick != lastTick
+            val shrank = viewportHeight < lastVh || viewportWidth < lastVw
+            first = false
             lastSel = sel
             lastTick = tick
-            val scrolling = draggingHolder[0] ||
-                    scrollbarClock.last.elapsedNow() < SCROLLBAR_QUIET_GRAB_MS.milliseconds
-            if (!explicit && scrolling) return@collect
+            lastVh = viewportHeight
+            lastVw = viewportWidth
+            if (!explicit) {
+                if (!shrank) return@collect
+                val scrolling = draggingHolder[0] ||
+                        scrollbarClock.last.elapsedNow() < SCROLLBAR_QUIET_GRAB_MS.milliseconds
+                if (scrolling) return@collect
+            }
             revealCaretIntoViewLive.value()
         }
     }
