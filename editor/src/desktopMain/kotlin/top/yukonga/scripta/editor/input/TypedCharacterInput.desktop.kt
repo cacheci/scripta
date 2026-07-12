@@ -54,6 +54,6 @@ actual fun insertTypedCharacter(engine: EditorEngine, event: KeyEvent, readOnly:
         isMac = hostOs.isMacOS,
     )
     if (!insertable) return false
-    engine.insert(String(Character.toChars(event.utf16CodePoint)))
+    engine.typeCharacter(String(Character.toChars(event.utf16CodePoint))) // 键入原语：带自动配对/跳过闭合
     return true
 }

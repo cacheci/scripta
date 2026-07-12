@@ -55,6 +55,11 @@ internal class EditorInputConnection(
         if (engine.composing == null && text.length == 1 && text[0] == '\n') {
             engine.insertNewlineAutoIndent(); return true
         }
+        // 软键盘的普通单字符提交 = 键入：走键入原语（自动配对/跳过闭合）。仅限无预编辑且
+        // newCursorPosition==1（标准打字形态）；预编辑提交/整词候选/含格式的 commit 照走原语义。
+        if (engine.composing == null && text.length == 1 && newCursorPosition == 1) {
+            engine.typeCharacter(text.toString()); return true
+        }
         engine.commitText(text.toString(), newCursorPosition); return true
     }
 
@@ -112,7 +117,7 @@ internal class EditorInputConnection(
                 else -> {
                     val ch = event.unicodeChar
                     if (ch != 0) {
-                        engine.insert(String(Character.toChars(ch))); return true
+                        engine.typeCharacter(String(Character.toChars(ch))); return true // 键入原语：带自动配对
                     }
                 }
             }

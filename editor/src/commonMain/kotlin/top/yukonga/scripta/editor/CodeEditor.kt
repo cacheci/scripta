@@ -209,6 +209,9 @@ fun CodeEditor(
     softWrap: Boolean = false,
     lineNumberMode: LineNumberMode = LineNumberMode.PinnedToScreen,
     symbols: List<EditorSymbol> = DefaultEditorSymbols,
+    /** 键入智能：括号/引号自动配对、跳过闭合、成对退格。改变输入行为本身，故给宿主关闭权
+     *  （匹配高亮不受此控——纯视觉、无输入副作用）。 */
+    autoClosePairs: Boolean = true,
     /**
      * 语法高亮插件；null 时按 [language] 选内置插件（PlainText = 不高亮）。自定义插件优先于内置。
      * 实例须跨重组稳定（`remember` 住再传入）——它是行状态链缓存与 layout 缓存的 key，
@@ -221,6 +224,7 @@ fun CodeEditor(
     val engine = controller.engine
     val findSession = controller.find
     val gotoSession = controller.gotoLine
+    engine.autoClosePairs = autoClosePairs // 键入路径读引擎字段（非 state），组合期同步参数即可
 
     // 查找结果重算：可见性 / 查询串 / 三个开关 / 文档版本任一变化即重算（snapshotFlow 只订阅这些读取，
     // 不牵动本可组合重组）。列表做结构比较，去掉纯粹的重复快照。
@@ -1837,7 +1841,7 @@ fun CodeEditor(
             SymbolBar(
                 symbols = symbols,
                 colors = colors,
-                onSymbol = { symbol -> engine.insert(symbol.value) },
+                onSymbol = { symbol -> engine.typeCharacter(symbol.value) }, // 键入原语：{ [ ( " 等也自动配对；Tab 多字符自动退化为原样插入
                 windowInsets = bottomBarInsets,
             )
         }

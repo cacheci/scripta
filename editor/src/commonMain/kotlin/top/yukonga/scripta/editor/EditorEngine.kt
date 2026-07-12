@@ -36,6 +36,10 @@ class EditorEngine(initialText: String = "") {
     companion object {
         /** 缩进单位：Tab 键插入 / 块缩进 / 反缩进共用的一档宽度。 */
         const val INDENT_UNIT = "    "
+
+        // 自动配对表与闭字符集（跳过闭合判定用；引号开闭同字符、两边都在）。
+        private val AUTO_PAIRS = mapOf('(' to ')', '[' to ']', '{' to '}', '"' to '"', '\'' to '\'')
+        private val AUTO_PAIR_CLOSERS = AUTO_PAIRS.values.toSet()
     }
 
     val buffer = TextBuffer()
@@ -437,9 +441,64 @@ class EditorEngine(initialText: String = "") {
 
     fun insert(text: String) = commitText(text, 1)
 
+    /** 键入智能开关：自动配对/跳过闭合/成对退格（宿主经 CodeEditor 参数控制）。非 state：只被键入路径读。 */
+    var autoClosePairs: Boolean = true
+
+    /**
+     * 「键入一个字符」：与 [insert]（原始插入——粘贴/编程写入/IME 提交走它）不同，本原语承载键入的
+     * 智能行为，供各键入路径（桌面 KeyEvent、Android 软键盘单字符、符号条）共用：
+     * - 开括号 `([{` 成对插入、光标停中间（一次 insert，撤销一步连闭合一起回退）；
+     * - 键入的闭字符与光标右侧相同 → 不插入、只越过（跳过闭合，含引号的第二击）；
+     * - 引号按意图启发式：行内左侧同引号奇数个（正在串里、这是闭合）或右侧贴字母数字（在词前补引号）
+     *   都原样插入，只有「开新串」的位置才成对；
+     * - 预编辑中 / 多字符 / 有选区（包裹语义争议大，按普通替换）/ 开关关闭 → 全部退化为 [insert]。
+     */
+    fun typeCharacter(text: String) {
+        if (!autoClosePairs || composing != null || text.length != 1 || !selection.isEmpty) {
+            insert(text)
+            return
+        }
+        val ch = text[0]
+        val pos = selStart
+        val line = buffer.lineText(pos.line)
+        val right = if (pos.column < line.length) line[pos.column] else null
+        if (right == ch && ch in AUTO_PAIR_CLOSERS) {
+            setCursor(TextPosition(pos.line, pos.column + 1)) // 跳过闭合
+            return
+        }
+        val close = AUTO_PAIRS[ch]
+        if (close == null) {
+            insert(text)
+            return
+        }
+        if (ch == '"' || ch == '\'') {
+            var count = 0
+            for (i in 0 until pos.column) if (line[i] == ch) count++
+            if (count % 2 == 1 || (right != null && right.isLetterOrDigit())) {
+                insert(text)
+                return
+            }
+        }
+        insert("$ch$close")
+        setCursor(TextPosition(selStart.line, selStart.column - 1)) // 光标回到配对中间
+    }
+
     fun backspace() {
         if (!selection.isEmpty) {
             replaceRange(selection, ""); return
+        }
+        // 光标恰在自动配对正中（左开右闭同源）：整对一起删——留半个孤儿闭合比多删一个字符更烦。
+        if (autoClosePairs && composing == null) {
+            val line = buffer.lineText(selStart.line)
+            val col = selStart.column
+            if (col in 1 until line.length && AUTO_PAIRS[line[col - 1]] == line[col]) {
+                replaceRange(
+                    TextRange(TextPosition(selStart.line, col - 1), TextPosition(selStart.line, col + 1)),
+                    "",
+                    EditKind.DeleteBackward,
+                )
+                return
+            }
         }
         val prev = previousCodePointPosition(selStart) ?: return
         replaceRange(TextRange(prev, selStart), "", EditKind.DeleteBackward)
