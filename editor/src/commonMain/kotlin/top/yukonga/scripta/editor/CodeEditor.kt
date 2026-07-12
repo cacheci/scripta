@@ -146,6 +146,11 @@ private const val PAD_X_BASE_DP = 8f
  */
 private const val BOTTOM_SCROLL_PAD_FRACTION = 0.2f
 
+/** 右侧可滚过行尾的留白（视口宽比例）：滚满时最长行尾不贴屏幕右缘，行尾编辑有呼吸空间——否则只余
+ *  一个 padX（~8dp）的贴边感。取比底部小的比例：横向空间更稀缺，10% ≈ 四五个字符宽已够。无需
+ *  Settle 双上界（那是收键盘视口高复原的专属坑，视口宽没有对应的自动复原场景）。 */
+private const val RIGHT_SCROLL_PAD_FRACTION = 0.1f
+
 // 滚动条：thumb 最小高（超长文档比例高会缩成几像素、无法抓取）/ 右缘可抓热区宽 / 命中的纵向余量。
 private val SCROLLBAR_MIN_THUMB = 48.dp
 private val SCROLLBAR_HOT_ZONE = 24.dp
@@ -524,7 +529,10 @@ fun CodeEditor(
     val bottomScrollPadPx = viewportHeight * BOTTOM_SCROLL_PAD_FRACTION
     val maxScrollY = (contentHeight - viewportHeight + bottomScrollPadPx).coerceAtLeast(0f)
     val maxScrollYSettle = (contentHeight - viewportHeight).coerceAtLeast(0f)
-    val maxScrollX = if (softWrap) 0f else (gutterWidthPx + padXPx * 2 + widestSeen[0] - viewportWidth).coerceAtLeast(0f)
+    val maxScrollX = if (softWrap) 0f else {
+        (gutterWidthPx + padXPx * 2 + widestSeen[0] + viewportWidth * RIGHT_SCROLL_PAD_FRACTION - viewportWidth)
+            .coerceAtLeast(0f)
+    }
 
     // 换行下缩放的顶部锚定精确校正：字号现每手势只在 commitZoom 变一次 → 本效应每手势只触发一次。commitZoom 已同步置好近似
     // scrollY（提交帧≈预览末帧）；本效应在可见行按新字号重排后，用新布局把「锚字符所在折行」精确放回视口顶 (y=0)——顶部稳定、
