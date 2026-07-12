@@ -554,12 +554,12 @@ fun CodeEditor(
         if (!scrollbarClock.shown || scrollbarClock.fading) {
             scrollbarClock.shown = true
             scrollbarClock.fading = false
-            scrollbarShowTick.value++ // 低频沿：已显示且未在淡出时只刷时间戳、零 state 写
+            scrollbarShowTick.intValue++ // 低频沿：已显示且未在淡出时只刷时间戳、零 state 写
         }
     }
 
     LaunchedEffect(engine) {
-        snapshotFlow { scrollbarShowTick.value }.collectLatest { tick ->
+        snapshotFlow { scrollbarShowTick.intValue }.collectLatest { tick ->
             if (tick == 0) return@collectLatest // 挂载首发不显示（打开文件不闪条）
             scrollbarShownState.value = true
             scrollbarAlpha.animateTo(1f, tween(100))
@@ -1633,35 +1633,36 @@ fun CodeEditor(
                         scrollbarDragging.value = true // 长按块以此互斥：消费 down 挡不住计时器型检测器
                         scrollbarThumbTopOverride.value = thumbTop
                         val grabOffset = down.position.y - thumbTop
-                        // slop 前只置视觉态不动文档：240k 行下 thumb 1px ≈ 上百行，按压/liftoff 抖动直写会随机
-                        // 跳走（手柄拖拽与缩放后平移同以 slop 门挡这类抖动）。
-                        val slop = awaitTouchSlopOrCancellation(down.id) { c, _ -> c.consume() }
-                        if (slop != null) {
-                            // 行空间反解：抓取行锚定 + 轨道分数位移 × 行数。softWrap 的估算内容高会在拖入新区域时
-                            // 被可见测量逐帧抬高——像素反解会让 thumb 从指下溜走、拖到轨道底也够不到真实文末；
-                            // 行数是唯一稳定量（见 ScrollbarMath.dragTargetLine）。thumb 绘制位置拖拽期直接跟手
-                            //（Override），抬手后再按比例回落。
-                            val grabLine = lineAtPxLive.value(scrollY)
-                            val downY = down.position.y
-                            fun applyDrag(y: Float) {
-                                val target = ScrollbarMath.dragTargetLine(grabLine, downY, y, vh, thumbH, liveLineCount.value)
-                                scrollY = lineTopPxLive.value(target).coerceIn(0f, liveMaxScrollY.value)
-                                scrollbarThumbTopOverride.value = (y - grabOffset).coerceIn(0f, vh - thumbH)
-                                scrollbarBubbleLine.value = target
-                                scrollbarClock.last = TimeSource.Monotonic.markNow()
+                        // 行空间反解：抓取行锚定 + 轨道分数位移 × 行数。softWrap 的估算内容高会在拖入新区域时
+                        // 被可见测量逐帧抬高——像素反解会让 thumb 从指下溜走、拖到轨道底也够不到真实文末；
+                        // 行数是唯一稳定量（见 ScrollbarMath.dragTargetLine）。thumb 绘制位置拖拽期直接跟手
+                        //（Override），抬手后再按比例回落。
+                        val grabLine = lineAtPxLive.value(scrollY)
+                        val downY = down.position.y
+                        var dragStarted = false
+                        fun applyDrag(y: Float) {
+                            val target = ScrollbarMath.dragTargetLine(grabLine, downY, y, vh, thumbH, liveLineCount.value)
+                            scrollY = lineTopPxLive.value(target).coerceIn(0f, liveMaxScrollY.value)
+                            scrollbarThumbTopOverride.value = (y - grabOffset).coerceIn(0f, vh - thumbH)
+                            scrollbarBubbleLine.value = target
+                            scrollbarClock.last = TimeSource.Monotonic.markNow()
+                        }
+                        while (true) {
+                            val ev = awaitPointerEvent()
+                            if (ev.changes.count { it.pressed } >= 2) break // 第二指落下：整手势让给缩放块，避免同帧双写 scrollY
+                            val ch = ev.changes.firstOrNull { it.id == down.id } ?: break
+                            if (!ch.pressed) {
+                                ch.consume() // up 也消费：快抓快放不被点按块当 tap 落光标
+                                break
                             }
-                            applyDrag(slop.position.y)
-                            while (true) {
-                                val ev = awaitPointerEvent()
-                                if (ev.changes.count { it.pressed } >= 2) break // 第二指落下：整手势让给缩放块，避免同帧双写 scrollY
-                                val ch = ev.changes.firstOrNull { it.id == down.id } ?: break
-                                if (!ch.pressed) {
-                                    ch.consume() // up 也消费：快抓快放不被点按块当 tap 落光标
-                                    break
-                                }
-                                applyDrag(ch.position.y)
-                                ch.consume()
-                            }
+                            // 抓住即接管：每个 Move 立即消费，slop 判定自做（只看纵向位移——横向偏出热区不中断，
+                            // 抓住的拖拽以松手为终点、不以停留区域为条件）。不能用「slop 前不消费」的等待式检测：
+                            // 按住 thumb 超过长按超时后，长按检测器的内部状态机会进入拖拽段开始消费 Move（互斥门
+                            // 只挡得住它的动作、挡不住消费），等待式 slop 一见被消费的 Move 就取消——「按住变粗后
+                            // 下滑没反应」。slop 之前仍不写文档：240k 行下 thumb 1px ≈ 上百行，按压抖动直写会随机跳。
+                            if (!dragStarted && abs(ch.position.y - downY) > viewConfiguration.touchSlop) dragStarted = true
+                            if (dragStarted) applyDrag(ch.position.y)
+                            ch.consume()
                         }
                         scrollbarDragging.value = false
                         scrollbarThumbTopOverride.value = -1f
