@@ -543,9 +543,8 @@ fun CodeEditor(
     // 回调只写普通时间戳（零分配），仅「隐藏→显示」的上升沿写一次 tick state。
     val scrollbarAlpha = remember(engine) { Animatable(0f) }
     val scrollbarShowTick = remember(engine) { mutableIntStateOf(0) }
-    val scrollbarDragging = remember(engine) { mutableStateOf(false) } // draw 读（加宽/气泡）+ 长按门 + 看门恒显
+    val scrollbarDragging = remember(engine) { mutableStateOf(false) } // draw 读（加宽过渡）+ 长按门 + 看门恒显
     val scrollbarThumbTopOverride = remember(engine) { mutableFloatStateOf(-1f) } // 拖拽期 thumb 跟手位置；-1 = 按比例
-    val scrollbarBubbleLine = remember(engine) { mutableIntStateOf(-1) } // 拖拽期气泡行号（0 基）；-1 = 无
     val scrollbarShownState = remember(engine) { mutableStateOf(false) } // 组合读：可抓期挂载右缘系统手势排除
     val scrollbarClock = remember(engine) { ScrollbarClock() }
 
@@ -1337,7 +1336,7 @@ fun CodeEditor(
                             // 鼠标静止长按也会触发本回调（awaitLongPressOrCancellation 不校验初始 down 的消费，
                             // 无后续移动即超时触发）；此时 lastInteractionWasMouse 已被最内层鼠标块置 true，跳过——
                             // 否则会给鼠标选区错误选词并重新露出触屏手柄。触屏长按时该标记已由点按块置 false。
-                            // 抓住滚动条 thumb 静止 >500ms（看气泡确认位置）同理触发到此，靠 dragging 标志显式互斥——
+                            // 抓住滚动条 thumb 静止超过长按超时同理触发到此，靠 dragging 标志显式互斥——
                             // 消费 down 挡不住计时器型检测器。
                             if (!lastInteractionWasMouse && !scrollbarDragging.value) {
                                 haptic.performHapticFeedback(HapticFeedbackType.LongPress) // 长按进入选择时轻震确认
@@ -1631,7 +1630,7 @@ fun CodeEditor(
                         if (hitsVisibleTouchHandle(down.position)) return@awaitEachGesture
                         down.consume()
                         scrollbarDragging.value = true // 长按块以此互斥：消费 down 挡不住计时器型检测器
-                        scrollbarThumbTopOverride.value = thumbTop
+                        scrollbarThumbTopOverride.floatValue = thumbTop
                         val grabOffset = down.position.y - thumbTop
                         // 行空间反解：抓取行锚定 + 轨道分数位移 × 行数。softWrap 的估算内容高会在拖入新区域时
                         // 被可见测量逐帧抬高——像素反解会让 thumb 从指下溜走、拖到轨道底也够不到真实文末；
@@ -1643,8 +1642,7 @@ fun CodeEditor(
                         fun applyDrag(y: Float) {
                             val target = ScrollbarMath.dragTargetLine(grabLine, downY, y, vh, thumbH, liveLineCount.value)
                             scrollY = lineTopPxLive.value(target).coerceIn(0f, liveMaxScrollY.value)
-                            scrollbarThumbTopOverride.value = (y - grabOffset).coerceIn(0f, vh - thumbH)
-                            scrollbarBubbleLine.value = target
+                            scrollbarThumbTopOverride.floatValue = (y - grabOffset).coerceIn(0f, vh - thumbH)
                             scrollbarClock.last = TimeSource.Monotonic.markNow()
                         }
                         while (true) {
@@ -1665,8 +1663,7 @@ fun CodeEditor(
                             ch.consume()
                         }
                         scrollbarDragging.value = false
-                        scrollbarThumbTopOverride.value = -1f
-                        scrollbarBubbleLine.value = -1
+                        scrollbarThumbTopOverride.floatValue = -1f
                         markUserScroll() // 抬手重新武装淡出计时
                     }
                 }
@@ -1737,12 +1734,9 @@ fun CodeEditor(
             // 滚动条独立图层：淡入淡出只重绘本小层，不整层重录主画布（同 CursorOverlay 的隔离理由）。
             ScrollbarOverlay(
                 colors = colors,
-                textMeasurer = measurer,
-                numberStyle = numberStyle,
                 alpha = { scrollbarAlpha.value },
                 dragging = { scrollbarDragging.value },
-                thumbTopOverridePx = { scrollbarThumbTopOverride.value },
-                bubbleLine = { scrollbarBubbleLine.value },
+                thumbTopOverridePx = { scrollbarThumbTopOverride.floatValue },
                 scrollY = { scrollY.coerceIn(0f, maxScrollY) },
                 maxScrollY = { liveMaxScrollY.value },
                 minThumbPx = with(density) { SCROLLBAR_MIN_THUMB.toPx() },
