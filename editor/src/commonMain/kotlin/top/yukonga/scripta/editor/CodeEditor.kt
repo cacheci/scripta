@@ -2,6 +2,8 @@ package top.yukonga.scripta.editor
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.awaitTouchSlopOrCancellation
@@ -58,6 +60,7 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.PointerType
+import androidx.compose.ui.input.pointer.isPrimaryPressed
 import androidx.compose.ui.input.pointer.isSecondaryPressed
 import androidx.compose.ui.input.pointer.isShiftPressed as isKeyboardShiftPressed
 import androidx.compose.ui.input.pointer.pointerHoverIcon
@@ -87,6 +90,7 @@ import top.yukonga.scripta.editor.highlight.SyntaxHighlighter
 import top.yukonga.scripta.editor.highlight.YamlHighlighter
 import top.yukonga.scripta.editor.highlight.highlightedText
 import top.yukonga.scripta.editor.input.EditorKeyCommand
+import top.yukonga.scripta.editor.input.editorRightEdgeGestureExclusion
 import top.yukonga.scripta.editor.input.editorTextInput
 import top.yukonga.scripta.editor.input.insertTypedCharacter
 import top.yukonga.scripta.editor.input.resolveEditorKeyCommand
@@ -99,12 +103,15 @@ import top.yukonga.scripta.editor.render.EditorCanvas
 import top.yukonga.scripta.editor.render.EditorGeometry
 import top.yukonga.scripta.editor.render.HandleKind
 import top.yukonga.scripta.editor.render.MagnifierOverlay
+import top.yukonga.scripta.editor.render.ScrollbarMath
+import top.yukonga.scripta.editor.render.ScrollbarOverlay
 import top.yukonga.scripta.editor.render.VisualRowIndex
 import top.yukonga.scripta.editor.render.ZoomMath
 import top.yukonga.scripta.editor.text.TextPosition
 import top.yukonga.scripta.editor.text.TextRange
 import kotlin.math.abs
 import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.TimeSource
 
 /** 超过此字符数的行走「网格」快路：不整行 shaping，只按可见列窗口等宽算术定位/绘制（M2，仅不换行）。 */
 private const val LONG_LINE_THRESHOLD = 2000
@@ -137,6 +144,25 @@ private const val PAD_X_BASE_DP = 8f
  * 推大、收键盘后 re-clamp 夹到含留白上界，会在末行下方残留一块空白。0.2 = 末行最多上移到距底 1/5 视口。
  */
 private const val BOTTOM_SCROLL_PAD_FRACTION = 0.2f
+
+// 滚动条：thumb 最小高（超长文档比例高会缩成几像素、无法抓取）/ 右缘可抓热区宽 / 命中的纵向余量。
+private val SCROLLBAR_MIN_THUMB = 48.dp
+private val SCROLLBAR_HOT_ZONE = 24.dp
+private val SCROLLBAR_GRAB_SLACK = 8.dp
+
+// 静止多久开始淡出 / 淡入淡出时长 / 「滚动刚停」静默期（fling 进行中 thumb 不可抓——沿右缘起手的
+// 下一次 flick 会被绝对映射吃成半个文档的跳转，且 fling 循环与拖拽循环会同帧竞写 scrollY）。
+private const val SCROLLBAR_IDLE_MS = 1200
+private const val SCROLLBAR_QUIET_GRAB_MS = 150
+
+/** 滚动条显示状态机在回调/看门协程间共享的非 state 部件（全部 UI 线程）：活动时间戳 + 低频沿镜像。
+ *  时间戳每滚动帧都写，用普通字段而非快照 state（本文件的每帧零装箱纪律，见 scrollY 声明处）。 */
+private class ScrollbarClock {
+    var last: TimeSource.Monotonic.ValueTimeMark = TimeSource.Monotonic.markNow()
+    var shown = false
+    var fading = false
+    var hovering = false
+}
 
 /**
  * layoutFor 逐行缓存条目。[validatedVersion] 记「上次确认与文档一致时的 buffer.version」：命中且版本相等即
@@ -509,6 +535,52 @@ fun CodeEditor(
         scrollY = anchorRowTopY.coerceIn(0f, maxScrollY) // 回到视口顶 (screenY=0)；上界含留白，缩放不夹掉主动滚入的留白
     }
 
+    // ── 滚动条：显示状态机 ─────────────────────────────────────────────────────────────────
+    // 显示只由「用户指针滚动」驱动（scroll2D 回调 / 滚轮 / 缩放后单指平移 / thumb 拖拽自身）；程序性
+    // scrollY 变化（keep-in-view、goto/查找跳转、收键盘 re-clamp）**不显示**——否则打字、收键盘都会在
+    // 右缘凭空出现一个短暂的点击拦截区。机制是沿触发而非观测 scrollY：fling 每帧写 scrollY，snapshotFlow
+    // 观测它会每帧装箱发射 + collectLatest 每帧重启动画协程，恰好砸在本文件最严的热路径上；这里滚动
+    // 回调只写普通时间戳（零分配），仅「隐藏→显示」的上升沿写一次 tick state。
+    val scrollbarAlpha = remember(engine) { Animatable(0f) }
+    val scrollbarShowTick = remember(engine) { mutableIntStateOf(0) }
+    val scrollbarDragging = remember(engine) { mutableStateOf(false) } // draw 读（加宽/气泡）+ 长按门 + 看门恒显
+    val scrollbarThumbTopOverride = remember(engine) { mutableFloatStateOf(-1f) } // 拖拽期 thumb 跟手位置；-1 = 按比例
+    val scrollbarBubbleLine = remember(engine) { mutableIntStateOf(-1) } // 拖拽期气泡行号（0 基）；-1 = 无
+    val scrollbarShownState = remember(engine) { mutableStateOf(false) } // 组合读：可抓期挂载右缘系统手势排除
+    val scrollbarClock = remember(engine) { ScrollbarClock() }
+
+    fun markUserScroll() {
+        scrollbarClock.last = TimeSource.Monotonic.markNow()
+        if (!scrollbarClock.shown || scrollbarClock.fading) {
+            scrollbarClock.shown = true
+            scrollbarClock.fading = false
+            scrollbarShowTick.value++ // 低频沿：已显示且未在淡出时只刷时间戳、零 state 写
+        }
+    }
+
+    LaunchedEffect(engine) {
+        snapshotFlow { scrollbarShowTick.value }.collectLatest { tick ->
+            if (tick == 0) return@collectLatest // 挂载首发不显示（打开文件不闪条）
+            scrollbarShownState.value = true
+            scrollbarAlpha.animateTo(1f, tween(100))
+            while (true) {
+                withFrameNanos { }
+                if (scrollbarDragging.value || scrollbarClock.hovering) {
+                    scrollbarClock.last = TimeSource.Monotonic.markNow() // 拖拽/悬停恒显 = 计时持续顺延
+                    continue
+                }
+                if (scrollbarClock.last.elapsedNow() >= SCROLLBAR_IDLE_MS.milliseconds) break
+            }
+            scrollbarClock.fading = true
+            scrollbarAlpha.animateTo(0f, tween(300))
+            // 走到这 = 淡出未被打断（淡出中 markUserScroll 会 tick++，collectLatest 在 animateTo 挂起点
+            // 取消本块重启、alpha 从中间值续入淡入，下面两行不执行）。
+            scrollbarClock.fading = false
+            scrollbarClock.shown = false
+            scrollbarShownState.value = false
+        }
+    }
+
     // 二维自由平移：跟手拖动时横纵可斜向同时滚（而非被锁在单轴——两个正交的单轴 scrollable 会在拖动起始按
     // 方向锁定其一）；但松手 fling 惯性时锁到主导轴（垂直或水平），避免斜向漂移。用独立 interactionSource 追踪
     // 「是否正在拖动」：DragInteraction 期间为跟手，其后由 fling 驱动的回调即惯性阶段。holder 用普通数组（非
@@ -526,6 +598,7 @@ fun CodeEditor(
         }
     }
     val scroll2D = rememberScrollable2DState { delta ->
+        markUserScroll() // 用户拖动/fling 每帧到此：唤出滚动条并顺延淡出（零分配，state 只在显隐沿写）
         if (draggingHolder[0]) {
             // 跟手：横纵自由平移。每帧清 flingAxis，松手后由 fling 首帧重新按速度方向锁轴。
             flingAxis[0] = 0
@@ -745,6 +818,28 @@ fun CodeEditor(
 
     val caretRectLive = rememberUpdatedState<(TextPosition) -> FloatArray?> { caretScreenColumnRect(it) }
 
+    // 滚动条拖拽用的活值包装（pointerInput(engine) 闭包固定，字号/换行/行数变化不重启——同 caretRectLive 惯例）。
+    val lineTopPxLive = rememberUpdatedState<(Int) -> Float> { lineTopPx(it) }
+    val lineAtPxLive = rememberUpdatedState<(Float) -> Int> { lineAtPx(it) }
+    val liveLineCount = rememberUpdatedState(lineCount)
+
+    // 可见泪滴手柄命中（滚动条让位判定）：选区端点手柄的命中盒可整段泡在右缘热区里，可见手柄恒优先于
+    // thumb——否则「长按选词拖到右缘、松手抓端点微调」会被 thumb 的绝对映射把文档传送走。分支与手柄
+    // 拖拽块一致：有选区看两端，无选区看光标手柄（可见、非只读、非鼠标态）。
+    fun hitsVisibleTouchHandle(p: Offset): Boolean {
+        if (lastInteractionWasMouse) return false
+        fun hit(kind: HandleKind, at: TextPosition): Boolean {
+            val r = caretRectLive.value(at) ?: return false
+            return EditorGeometry.handleGeometry(kind, r[0], r[1], r[2], handleRadiusPx, handleSlopPx).hitContains(p.x, p.y)
+        }
+        val sel = engine.selection
+        return if (!sel.isEmpty) {
+            hit(HandleKind.SelectionEnd, sel.end) || hit(HandleKind.SelectionStart, sel.start)
+        } else {
+            caretHandleVisible && !readOnlyLive.value && hit(HandleKind.Caret, sel.start)
+        }
+    }
+
     // 边缘自动滚动 effect 的 key 是 Boolean、不随重组刷新，循环体会按值捕获滚动上限。软换行下自动滚动
     // 驶入未测量区域时真实 maxScrollY 会随测量增大，用 rememberUpdatedState 让循环读到当前帧上限，
     // 否则会停在旧估算的「假底部」、选不到文档末尾（与 hitScrollY 同类修复）。
@@ -932,6 +1027,13 @@ fun CodeEditor(
                 .overscroll(overscroll)
                 .onSizeChanged { viewportWidth = it.width.toFloat(); viewportHeight = it.height.toFloat() }
                 .onGloballyPositioned { contentTopInWindow = it.positionInWindow().y }
+                // 滚动条可抓期把右缘热区从系统手势区摘出来（Android 手势导航的返回区与热区重合，不摘则
+                // 抓 thumb 起手稍带向左分量就被系统当返回、直接退出编辑屏）；淡出即撤销，不常驻削弱返回手势。
+                .then(
+                    if (scrollbarShownState.value) {
+                        Modifier.editorRightEdgeGestureExclusion(with(density) { SCROLLBAR_HOT_ZONE.toPx() })
+                    } else Modifier
+                )
                 .scrollable2D(scroll2D, overscrollEffect = overscroll, interactionSource = scrollInteraction)
                 // 鼠标滚轮 / 触控板滚动：scrollable2D 只含拖拽、无滚轮节点（滚轮逻辑只在 1D scrollable 的
                 // MouseWheelScrollingLogic 里），故自行处理 Scroll 事件、据 scrollDelta 更新滚动量。clamp 用实时
@@ -940,11 +1042,24 @@ fun CodeEditor(
                     awaitPointerEventScope {
                         while (true) {
                             val event = awaitPointerEvent()
+                            // 顺带处理鼠标悬停右缘唤出滚动条（本块本就旁观全部事件流；hover 无按压、无人消费）。
+                            // 进出沿驱动：进入唤出/恒显，离开交还看门计时淡出。
+                            if (event.type == PointerEventType.Move &&
+                                event.changes.none { it.pressed } &&
+                                event.changes.firstOrNull()?.type == PointerType.Mouse
+                            ) {
+                                val inZone = event.changes.first().position.x >= size.width - SCROLLBAR_HOT_ZONE.toPx()
+                                if (inZone != scrollbarClock.hovering) {
+                                    scrollbarClock.hovering = inZone
+                                    if (inZone) markUserScroll()
+                                }
+                            }
                             if (event.type != PointerEventType.Scroll) continue
                             var dx = 0f
                             var dy = 0f
                             event.changes.forEach { dx += it.scrollDelta.x; dy += it.scrollDelta.y }
                             if (dx == 0f && dy == 0f) continue
+                            markUserScroll()
                             val step = liveLineHeightPx.value * 3f
                             scrollY = (scrollY + dy * step).coerceIn(0f, liveMaxScrollY.value)
                             scrollX = (scrollX + dx * step).coerceIn(0f, liveMaxScrollX.value)
@@ -1039,6 +1154,7 @@ fun CodeEditor(
                                                 panActive = true; panLast = p.position
                                             }
                                         } else {
+                                            markUserScroll() // 缩放后单指平移也是用户滚动
                                             scrollX = (scrollX - d.x).coerceIn(0f, liveMaxScrollX.value)
                                             scrollY = (scrollY - d.y).coerceIn(0f, liveMaxScrollY.value)
                                             panLast = p.position
@@ -1169,6 +1285,7 @@ fun CodeEditor(
                 .pointerInput(engine) {
                     awaitEachGesture {
                         val down = awaitFirstDown(requireUnconsumed = false)
+                        if (down.isConsumed) return@awaitEachGesture // 滚动条 thumb 已接管（本文件唯一消费 down 的内层块）
                         if (down.type == PointerType.Mouse) return@awaitEachGesture // 仅鼠标让给最内层鼠标块；触控笔/未知指针走此触屏路径（勿漏掉 stylus）
                         lastInteractionWasMouse = false
                         showTouchMenu = false // 新一次触屏按下先隐藏菜单；本次手势结算（落光标/选词）后再亮
@@ -1220,7 +1337,9 @@ fun CodeEditor(
                             // 鼠标静止长按也会触发本回调（awaitLongPressOrCancellation 不校验初始 down 的消费，
                             // 无后续移动即超时触发）；此时 lastInteractionWasMouse 已被最内层鼠标块置 true，跳过——
                             // 否则会给鼠标选区错误选词并重新露出触屏手柄。触屏长按时该标记已由点按块置 false。
-                            if (!lastInteractionWasMouse) {
+                            // 抓住滚动条 thumb 静止 >500ms（看气泡确认位置）同理触发到此，靠 dragging 标志显式互斥——
+                            // 消费 down 挡不住计时器型检测器。
+                            if (!lastInteractionWasMouse && !scrollbarDragging.value) {
                                 haptic.performHapticFeedback(HapticFeedbackType.LongPress) // 长按进入选择时轻震确认
                                 val w = engine.wordRangeAt(positionAtLive.value(p))
                                 engine.setSelection(w.start, w.end)
@@ -1360,6 +1479,7 @@ fun CodeEditor(
                     var clickCount = 0
                     awaitEachGesture {
                         val down = awaitFirstDown(requireUnconsumed = false)
+                        if (down.isConsumed) return@awaitEachGesture // 滚动条 thumb 已接管：down 帧的 setCursor/清选区副作用一并跳过
                         if (down.type != PointerType.Mouse) return@awaitEachGesture // 触屏交给上方触屏块
                         down.consume()
                         lastInteractionWasMouse = true
@@ -1488,6 +1608,67 @@ fun CodeEditor(
                         }
                     }
                 }
+                // 滚动条 thumb 拖拽（链尾最内：Main pass 最先收 down；未命中不消费、完全透传）。可抓门层层叠：
+                // 显示中且非淡出（不留「看不见但可抓」的隐形拦截窗）、滚动静默 ≥150ms（fling 中沿右缘起手的下一次
+                // flick 不被绝对映射吃成半个文档的跳转，也避免 fling 循环与本循环同帧竞写 scrollY）、右缘热区命中
+                // thumb ±余量、鼠标须主键（右键留给上下文菜单块）、可见泪滴手柄不占。
+                .pointerInput(engine) {
+                    awaitEachGesture {
+                        val down = awaitFirstDown(requireUnconsumed = false)
+                        if (!scrollbarClock.shown || scrollbarClock.fading) return@awaitEachGesture
+                        if (scrollbarClock.last.elapsedNow() < SCROLLBAR_QUIET_GRAB_MS.milliseconds) return@awaitEachGesture
+                        val vh = viewportHeight
+                        val maxY = liveMaxScrollY.value
+                        val thumbH = ScrollbarMath.thumbHeight(vh, maxY, SCROLLBAR_MIN_THUMB.toPx())
+                        if (thumbH <= 0f) return@awaitEachGesture
+                        val thumbTop = ScrollbarMath.thumbTop(vh, maxY, thumbH, scrollY)
+                        val hit = ScrollbarMath.hitThumb(
+                            down.position.x, down.position.y,
+                            viewportWidth, SCROLLBAR_HOT_ZONE.toPx(), thumbTop, thumbH, SCROLLBAR_GRAB_SLACK.toPx(),
+                        )
+                        if (!hit) return@awaitEachGesture
+                        if (down.type == PointerType.Mouse && !currentEvent.buttons.isPrimaryPressed) return@awaitEachGesture
+                        if (hitsVisibleTouchHandle(down.position)) return@awaitEachGesture
+                        down.consume()
+                        scrollbarDragging.value = true // 长按块以此互斥：消费 down 挡不住计时器型检测器
+                        scrollbarThumbTopOverride.value = thumbTop
+                        val grabOffset = down.position.y - thumbTop
+                        // slop 前只置视觉态不动文档：240k 行下 thumb 1px ≈ 上百行，按压/liftoff 抖动直写会随机
+                        // 跳走（手柄拖拽与缩放后平移同以 slop 门挡这类抖动）。
+                        val slop = awaitTouchSlopOrCancellation(down.id) { c, _ -> c.consume() }
+                        if (slop != null) {
+                            // 行空间反解：抓取行锚定 + 轨道分数位移 × 行数。softWrap 的估算内容高会在拖入新区域时
+                            // 被可见测量逐帧抬高——像素反解会让 thumb 从指下溜走、拖到轨道底也够不到真实文末；
+                            // 行数是唯一稳定量（见 ScrollbarMath.dragTargetLine）。thumb 绘制位置拖拽期直接跟手
+                            //（Override），抬手后再按比例回落。
+                            val grabLine = lineAtPxLive.value(scrollY)
+                            val downY = down.position.y
+                            fun applyDrag(y: Float) {
+                                val target = ScrollbarMath.dragTargetLine(grabLine, downY, y, vh, thumbH, liveLineCount.value)
+                                scrollY = lineTopPxLive.value(target).coerceIn(0f, liveMaxScrollY.value)
+                                scrollbarThumbTopOverride.value = (y - grabOffset).coerceIn(0f, vh - thumbH)
+                                scrollbarBubbleLine.value = target
+                                scrollbarClock.last = TimeSource.Monotonic.markNow()
+                            }
+                            applyDrag(slop.position.y)
+                            while (true) {
+                                val ev = awaitPointerEvent()
+                                if (ev.changes.count { it.pressed } >= 2) break // 第二指落下：整手势让给缩放块，避免同帧双写 scrollY
+                                val ch = ev.changes.firstOrNull { it.id == down.id } ?: break
+                                if (!ch.pressed) {
+                                    ch.consume() // up 也消费：快抓快放不被点按块当 tap 落光标
+                                    break
+                                }
+                                applyDrag(ch.position.y)
+                                ch.consume()
+                            }
+                        }
+                        scrollbarDragging.value = false
+                        scrollbarThumbTopOverride.value = -1f
+                        scrollbarBubbleLine.value = -1
+                        markUserScroll() // 抬手重新武装淡出计时
+                    }
+                }
                 // I 形文本光标：桌面 / 带鼠标的 Android 悬停在文本区时显示；触屏无悬停、无副作用。
                 .pointerHoverIcon(PointerIcon.Text)
         ) {
@@ -1550,6 +1731,22 @@ fun CodeEditor(
                 gutterWidthPx = gutterWidthPx,
                 padXPx = padXPx,
                 previewScale = { previewScale }, // 缩放预览期不画光标（正文在缩放、光标会脱节）
+                modifier = Modifier.fillMaxSize(),
+            )
+            // 滚动条独立图层：淡入淡出只重绘本小层，不整层重录主画布（同 CursorOverlay 的隔离理由）。
+            ScrollbarOverlay(
+                colors = colors,
+                textMeasurer = measurer,
+                numberStyle = numberStyle,
+                alpha = { scrollbarAlpha.value },
+                dragging = { scrollbarDragging.value },
+                thumbTopOverridePx = { scrollbarThumbTopOverride.value },
+                bubbleLine = { scrollbarBubbleLine.value },
+                scrollY = { scrollY.coerceIn(0f, maxScrollY) },
+                maxScrollY = { liveMaxScrollY.value },
+                scrollX = { scrollX.coerceIn(0f, maxScrollX) },
+                maxScrollX = { liveMaxScrollX.value },
+                minThumbPx = with(density) { SCROLLBAR_MIN_THUMB.toPx() },
                 modifier = Modifier.fillMaxSize(),
             )
             // 放大镜：宿主在窗口级 Popup（可浮到编辑器上方的工具栏/状态栏空间），仅光标/选区端点手柄拖拽时（handleDragActive）出现。
