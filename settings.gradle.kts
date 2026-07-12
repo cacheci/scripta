@@ -38,6 +38,8 @@ plugins {
 // :editor  — the reusable, self-drawn virtualized code editor library (common + android + desktop)
 // :sandbox — the demo app; KMP shared UI + one thin entry per platform (android app, desktop app)
 include(":editor")
-include(":sandbox:shared")
-include(":sandbox:android")
-include(":sandbox:desktop")
+if (gradle.parent == null) {
+    include(":sandbox:shared")
+    include(":sandbox:android")
+    include(":sandbox:desktop")
+}
