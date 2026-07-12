@@ -3,9 +3,9 @@ package top.yukonga.scripta.sandbox
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
@@ -16,7 +16,6 @@ import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.union
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.Composable
@@ -26,10 +25,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -142,116 +143,116 @@ fun SampleScreen(modifier: Modifier = Modifier) {
                 )
                 .padding(8.dp)
         ) {
-        // 第一行：文档 / 视图开关（FlowRow 兜底折行，防超窄屏溢出）。
-        FlowRow(Modifier.fillMaxWidth()) {
-            BasicText(
-                text = "  打开  ",
-                style = TextStyle(color = cOpen, fontSize = 13.sp),
-                modifier = Modifier.clickable { opener.open() },
-            )
-            BasicText(
-                text = "  示例  ",
-                style = TextStyle(color = cSample, fontSize = 13.sp),
-                modifier = Modifier.clickable {
-                    controller.setDocument(SAMPLE_YAML)
-                    language = EditorLanguage.Yaml
-                    openedName = null
-                    errorMessage = null
-                },
-            )
-            BasicText(
-                text = if (wrap) "  换行: 开  " else "  换行: 关  ",
-                style = TextStyle(color = cWrap, fontSize = 13.sp),
-                modifier = Modifier.clickable { wrap = !wrap },
-            )
-            BasicText(
-                text = if (readOnly) "  只读: 开  " else "  只读: 关  ",
-                style = TextStyle(color = cReadOnly, fontSize = 13.sp),
-                modifier = Modifier.clickable { readOnly = !readOnly },
-            )
-            BasicText(
-                text = if (lineNumberMode == LineNumberMode.PinnedToScreen) "  行号: 固定  " else "  行号: 跟随  ",
-                style = TextStyle(color = cLineNo, fontSize = 13.sp),
-                modifier = Modifier.clickable {
-                    lineNumberMode = if (lineNumberMode == LineNumberMode.PinnedToScreen) {
-                        LineNumberMode.PinnedToLine
-                    } else {
-                        LineNumberMode.PinnedToScreen
-                    }
-                },
-            )
-            BasicText(
-                text = when (theme) {
-                    DemoTheme.Dark -> "  主题: 深  "
-                    DemoTheme.Light -> "  主题: 浅  "
-                    DemoTheme.Custom -> "  主题: 自定义  "
-                },
-                style = TextStyle(color = cTheme, fontSize = 13.sp),
-                modifier = Modifier.clickable {
-                    themeOverride = when (theme) {
-                        DemoTheme.Dark -> DemoTheme.Light
-                        DemoTheme.Light -> DemoTheme.Custom
-                        DemoTheme.Custom -> DemoTheme.Dark
-                    }
-                },
-            )
-            (errorMessage ?: openedName)?.let {
+            // 第一行：文档 / 视图开关（FlowRow 兜底折行，防超窄屏溢出）。
+            FlowRow(Modifier.fillMaxWidth()) {
                 BasicText(
-                    text = it,
-                    style = TextStyle(color = cName, fontSize = 13.sp),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    softWrap = false,
-                    // FlowRow 的折行布局没有「剩余空间」语义可分（weight 不适用）；给个上限宽即可。
-                    modifier = Modifier
-                        .widthIn(max = 220.dp)
-                        .padding(start = 4.dp),
+                    text = "  打开  ",
+                    style = TextStyle(color = cOpen, fontSize = 13.sp),
+                    modifier = Modifier.clickable { opener.open() },
+                )
+                BasicText(
+                    text = "  示例  ",
+                    style = TextStyle(color = cSample, fontSize = 13.sp),
+                    modifier = Modifier.clickable {
+                        controller.setDocument(SAMPLE_YAML)
+                        language = EditorLanguage.Yaml
+                        openedName = null
+                        errorMessage = null
+                    },
+                )
+                BasicText(
+                    text = if (wrap) "  换行: 开  " else "  换行: 关  ",
+                    style = TextStyle(color = cWrap, fontSize = 13.sp),
+                    modifier = Modifier.clickable { wrap = !wrap },
+                )
+                BasicText(
+                    text = if (readOnly) "  只读: 开  " else "  只读: 关  ",
+                    style = TextStyle(color = cReadOnly, fontSize = 13.sp),
+                    modifier = Modifier.clickable { readOnly = !readOnly },
+                )
+                BasicText(
+                    text = if (lineNumberMode == LineNumberMode.PinnedToScreen) "  行号: 固定  " else "  行号: 跟随  ",
+                    style = TextStyle(color = cLineNo, fontSize = 13.sp),
+                    modifier = Modifier.clickable {
+                        lineNumberMode = if (lineNumberMode == LineNumberMode.PinnedToScreen) {
+                            LineNumberMode.PinnedToLine
+                        } else {
+                            LineNumberMode.PinnedToScreen
+                        }
+                    },
+                )
+                BasicText(
+                    text = when (theme) {
+                        DemoTheme.Dark -> "  主题: 深  "
+                        DemoTheme.Light -> "  主题: 浅  "
+                        DemoTheme.Custom -> "  主题: 自定义  "
+                    },
+                    style = TextStyle(color = cTheme, fontSize = 13.sp),
+                    modifier = Modifier.clickable {
+                        themeOverride = when (theme) {
+                            DemoTheme.Dark -> DemoTheme.Light
+                            DemoTheme.Light -> DemoTheme.Custom
+                            DemoTheme.Custom -> DemoTheme.Dark
+                        }
+                    },
                 )
             }
-        }
-        // 第二行：编辑动作（撤销 / 重做 / 查找 / 替换）单独一行。查找与替换是两种互斥模式：
-        // 查找不带替换行；各按钮再点一次关闭自己的模式。
-        Row {
-            BasicText(
-                text = "  撤销  ",
-                style = TextStyle(color = if (controller.canUndo) cHistory else cHistoryOff, fontSize = 13.sp),
-                modifier = Modifier.clickable { controller.undo() },
-            )
-            BasicText(
-                text = "  重做  ",
-                style = TextStyle(color = if (controller.canRedo) cHistory else cHistoryOff, fontSize = 13.sp),
-                modifier = Modifier.clickable { controller.redo() },
-            )
-            BasicText(
-                text = "  查找  ",
-                style = TextStyle(color = cOpen, fontSize = 13.sp),
-                modifier = Modifier.clickable {
-                    if (controller.isFindVisible && !controller.isReplaceVisible) {
-                        controller.closeFind()
-                    } else {
-                        controller.openFind()
-                    }
-                },
-            )
-            BasicText(
-                text = "  替换  ",
-                style = TextStyle(color = cOpen, fontSize = 13.sp),
-                modifier = Modifier.clickable {
-                    if (controller.isFindVisible && controller.isReplaceVisible) {
-                        controller.closeFind()
-                    } else {
-                        controller.openReplace()
-                    }
-                },
-            )
-            BasicText(
-                text = "  跳转  ",
-                style = TextStyle(color = cOpen, fontSize = 13.sp),
-                modifier = Modifier.clickable {
-                    if (controller.isGotoLineVisible) controller.closeGotoLine() else controller.openGotoLine()
-                },
-            )
-        }
+            // 第二行：编辑动作（撤销 / 重做 / 查找 / 替换 / 跳转）单独一行，行尾右对齐显示打开的文件名或
+            // 错误消息——首行 FlowRow 没有「剩余空间」语义，文件名放那儿放不下就被折成独立一行、夹在两行
+            // 按钮之间；本行按钮定宽靠左，右侧天然留白，文件名 weight 吸收余宽、超长单行省略，永不折行。
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                BasicText(
+                    text = "  撤销  ",
+                    style = TextStyle(color = if (controller.canUndo) cHistory else cHistoryOff, fontSize = 13.sp),
+                    modifier = Modifier.clickable { controller.undo() },
+                )
+                BasicText(
+                    text = "  重做  ",
+                    style = TextStyle(color = if (controller.canRedo) cHistory else cHistoryOff, fontSize = 13.sp),
+                    modifier = Modifier.clickable { controller.redo() },
+                )
+                BasicText(
+                    text = "  查找  ",
+                    style = TextStyle(color = cOpen, fontSize = 13.sp),
+                    modifier = Modifier.clickable {
+                        if (controller.isFindVisible && !controller.isReplaceVisible) {
+                            controller.closeFind()
+                        } else {
+                            controller.openFind()
+                        }
+                    },
+                )
+                BasicText(
+                    text = "  替换  ",
+                    style = TextStyle(color = cOpen, fontSize = 13.sp),
+                    modifier = Modifier.clickable {
+                        if (controller.isFindVisible && controller.isReplaceVisible) {
+                            controller.closeFind()
+                        } else {
+                            controller.openReplace()
+                        }
+                    },
+                )
+                BasicText(
+                    text = "  跳转  ",
+                    style = TextStyle(color = cOpen, fontSize = 13.sp),
+                    modifier = Modifier.clickable {
+                        if (controller.isGotoLineVisible) controller.closeGotoLine() else controller.openGotoLine()
+                    },
+                )
+                (errorMessage ?: openedName)?.let {
+                    BasicText(
+                        text = it,
+                        style = TextStyle(color = cName, fontSize = 13.sp, textAlign = TextAlign.End),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        softWrap = false,
+                        modifier = Modifier
+                            .weight(1f)
+                            .padding(start = 8.dp, end = 6.dp),
+                    )
+                }
+            }
         }
         CodeEditor(
             controller = controller,
