@@ -9,6 +9,8 @@ package top.yukonga.scripta.editor.highlight
  */
 class YamlHighlighter : SyntaxHighlighter {
 
+    override val lineCommentPrefix: String = "#"
+
     private data class BlockScalarState(val parentIndent: Int) : LineState
 
     override fun highlightLine(text: String, entryState: LineState?): LineHighlight {

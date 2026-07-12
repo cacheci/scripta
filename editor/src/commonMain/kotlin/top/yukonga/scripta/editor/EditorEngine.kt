@@ -321,6 +321,48 @@ class EditorEngine(initialText: String = "") {
         applyLineStartEdits(edits, "")
     }
 
+    /**
+     * 行注释切换：选区触及的非空白行全部已带 [prefix] 则逐行取消（删前缀及其后的惯例空格），否则全部
+     * 加一层——在各行的**最小缩进列**对齐插入 `"[prefix] "`（深缩进行的注释符与浅行成一列）。空白行
+     * 两个方向都跳过、也不参与判定；混合状态加一层，再切一次恰好还原。一个撤销单元、选区端点随文本
+     * 平移（复用 [applyLineStartEdits]）。前缀由调用方按语言提供（高亮插件的 lineCommentPrefix）。
+     */
+    fun toggleLineComment(prefix: String) {
+        val lines = affectedLines()
+        var minIndent = Int.MAX_VALUE
+        var allCommented = true
+        var sawContent = false
+        for (line in lines) {
+            val text = buffer.lineText(line)
+            if (text.isBlank()) continue
+            sawContent = true
+            var i = 0
+            while (i < text.length && (text[i] == ' ' || text[i] == '\t')) i++
+            if (i < minIndent) minIndent = i
+            if (!text.startsWith(prefix, i)) allCommented = false
+        }
+        if (!sawContent) return
+        if (allCommented) {
+            val ranges = lines.mapNotNull { line ->
+                val text = buffer.lineText(line)
+                if (text.isBlank()) return@mapNotNull null
+                var i = 0
+                while (i < text.length && (text[i] == ' ' || text[i] == '\t')) i++
+                var end = i + prefix.length
+                if (end < text.length && text[end] == ' ') end++
+                val p = buffer.offsetAt(TextPosition(line, 0))
+                (p + i) to (p + end)
+            }
+            applyLineStartEdits(ranges, "")
+        } else {
+            val ranges = lines.mapNotNull { line ->
+                if (buffer.lineText(line).isBlank()) return@mapNotNull null
+                buffer.offsetAt(TextPosition(line, minIndent)).let { it to it }
+            }
+            applyLineStartEdits(ranges, "$prefix ")
+        }
+    }
+
     /** 选区触及的行区间；非空选区终点恰在行首时末行不算（选到下一行行首 ≠ 选中那一行）。 */
     private fun affectedLines(): IntRange {
         val s = selStart

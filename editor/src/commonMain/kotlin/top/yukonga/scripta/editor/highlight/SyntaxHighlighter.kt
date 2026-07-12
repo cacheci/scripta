@@ -48,5 +48,8 @@ interface SyntaxHighlighter {
     /** 文档首行的进入状态；通常 null（无跨行结构）。 */
     val initialState: LineState? get() = null
 
+    /** 本语言的行注释前缀（注释切换 Ctrl+/ 用，如 YAML 的 `#`）；null = 无行注释、切换不可用。 */
+    val lineCommentPrefix: String? get() = null
+
     fun highlightLine(text: String, entryState: LineState?): LineHighlight
 }

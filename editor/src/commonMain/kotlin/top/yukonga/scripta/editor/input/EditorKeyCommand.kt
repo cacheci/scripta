@@ -12,7 +12,7 @@ import androidx.compose.ui.input.key.key
  *  撤销/重做的 Shift 参与命令区分，在此读取）。 */
 enum class EditorKeyCommand {
     SelectAll, Copy, Cut, Paste, Undo, Redo,
-    Find, Replace, FindNext, FindPrev, GotoLine,
+    Find, Replace, FindNext, FindPrev, GotoLine, ToggleComment,
     WordLeft, WordRight, LineStart, LineEnd, DocStart, DocEnd, PageUp, PageDown,
 }
 
@@ -33,6 +33,7 @@ internal fun resolveCtrlBased(e: KeyEvent): EditorKeyCommand? {
         Key.F -> if (ctrl) EditorKeyCommand.Find else null
         Key.H -> if (ctrl) EditorKeyCommand.Replace else null
         Key.G -> if (ctrl) EditorKeyCommand.GotoLine else null
+        Key.Slash -> if (ctrl) EditorKeyCommand.ToggleComment else null
         Key.F3 -> if (e.isShiftPressed) EditorKeyCommand.FindPrev else EditorKeyCommand.FindNext
         Key.DirectionLeft -> if (ctrl) EditorKeyCommand.WordLeft else null
         Key.DirectionRight -> if (ctrl) EditorKeyCommand.WordRight else null
@@ -61,6 +62,7 @@ internal fun resolveMacBased(e: KeyEvent): EditorKeyCommand? {
         }
         Key.G -> if (cmd) (if (e.isShiftPressed) EditorKeyCommand.FindPrev else EditorKeyCommand.FindNext) else null
         Key.L -> if (cmd) EditorKeyCommand.GotoLine else null
+        Key.Slash -> if (cmd) EditorKeyCommand.ToggleComment else null
         Key.DirectionLeft -> when {
             opt -> EditorKeyCommand.WordLeft
             cmd -> EditorKeyCommand.LineStart

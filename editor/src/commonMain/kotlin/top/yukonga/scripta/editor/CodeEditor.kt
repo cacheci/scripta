@@ -1266,6 +1266,11 @@ fun CodeEditor(
                                 findSession.close(); gotoSession.open()
                             }
 
+                            // 注释前缀来自当前语言的高亮插件（PlainText/无前缀语言 = 不可用、静默无操作）。
+                            EditorKeyCommand.ToggleComment -> if (!readOnlyLive.value) {
+                                resolvedHighlighter?.lineCommentPrefix?.let { engine.toggleLineComment(it) }
+                            }
+
                             EditorKeyCommand.WordLeft -> engine.moveCaretByWord(-1, shift)
                             EditorKeyCommand.WordRight -> engine.moveCaretByWord(1, shift)
                             EditorKeyCommand.LineStart -> engine.moveCaretToLineStart(shift)
