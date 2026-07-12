@@ -17,6 +17,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.util.lerp
 import top.yukonga.scripta.editor.EditorColors
 
+// thumb 尺寸：静止态要够粗——发丝线在高密度屏上传达不了「可抓」；且要离物理右缘足够远——贴边的
+// 可见条会让手指瞄准点落进厂商边缘防误触带，按下事件被系统吞掉、热区再大也救不回。拖拽态再展宽。
+private val THUMB_IDLE_WIDTH = 5.dp
+private val THUMB_ACTIVE_WIDTH = 8.dp
+private val THUMB_EDGE_MARGIN = 4.dp
+
 /**
  * 滚动条叠层：右缘纵向 thumb（可抓；抓取/拖拽由 CodeEditor 的手势层驱动，这里只画）+ 拖拽期行号
  * 气泡。独立轻量 Canvas——淡出动画只重绘本层，不整层重录主画布。**不画横向条**：横向上界由
@@ -55,7 +61,7 @@ internal fun ScrollbarOverlay(
         if (a <= 0f) return@Canvas
         val vh = size.height
         val vw = size.width
-        val marginPx = 2.dp.toPx()
+        val marginPx = THUMB_EDGE_MARGIN.toPx()
 
         val maxY = maxScrollY()
         val thumbH = ScrollbarMath.thumbHeight(vh, maxY, minThumbPx)
@@ -65,7 +71,7 @@ internal fun ScrollbarOverlay(
             val top = if (drag && override >= 0f) override.coerceIn(0f, vh - thumbH)
             else ScrollbarMath.thumbTop(vh, maxY, thumbH, scrollY())
             val f = activeFraction
-            val w = lerp(3.dp.toPx(), 6.dp.toPx(), f)
+            val w = lerp(THUMB_IDLE_WIDTH.toPx(), THUMB_ACTIVE_WIDTH.toPx(), f)
             drawRoundRect(
                 color = lerp(colors.scrollbarThumb, colors.scrollbarThumbActive, f),
                 topLeft = Offset(vw - w - marginPx, top),
