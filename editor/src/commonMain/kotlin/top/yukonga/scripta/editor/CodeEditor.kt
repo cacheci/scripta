@@ -507,7 +507,10 @@ fun CodeEditor(
         } else {
             val l = layoutFor(ln)
             if (!softWrap) {
-                val w = l?.size?.width?.toFloat() ?: 0f
+                // 行宽取 getLineRight（shaping 后的真实墨迹右缘）而非 size.width：后者在无限宽约束下走
+                // intrinsic 宽度路径取整，与逐簇布局右缘不一致——CJK/ASCII 混排百余字符可累计低估上百像素，
+                // maxScrollX 随之偏短、长行尾部滚不出来（charW 在声明处早为同一理由避开了 size.width）。
+                val w = l?.getLineRight(0) ?: 0f
                 if (w > widestSeen[0]) widestSeen[0] = w
             }
         }
