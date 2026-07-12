@@ -1,15 +1,20 @@
 package top.yukonga.scripta.editor.render
 
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.text.TextMeasurer
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.drawText
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.util.lerp
 import top.yukonga.scripta.editor.EditorColors
 
 /**
@@ -38,6 +43,13 @@ internal fun ScrollbarOverlay(
     minThumbPx: Float,
     modifier: Modifier = Modifier,
 ) {
+    // 按住加宽的过渡：宽度与活动色由同一动画分数驱动（瞬变突兀）。组合期读 dragging() 只在拖拽
+    // 沿重组本小层；动画分数逐帧由 draw 读、只重绘。
+    val activeFraction by animateFloatAsState(
+        targetValue = if (dragging()) 1f else 0f,
+        animationSpec = tween(durationMillis = 140),
+        label = "scrollbarActive",
+    )
     Canvas(modifier) {
         val a = alpha()
         if (a <= 0f) return@Canvas
@@ -52,9 +64,10 @@ internal fun ScrollbarOverlay(
             val override = thumbTopOverridePx()
             val top = if (drag && override >= 0f) override.coerceIn(0f, vh - thumbH)
             else ScrollbarMath.thumbTop(vh, maxY, thumbH, scrollY())
-            val w = (if (drag) 6.dp else 3.dp).toPx()
+            val f = activeFraction
+            val w = lerp(3.dp.toPx(), 6.dp.toPx(), f)
             drawRoundRect(
-                color = if (drag) colors.scrollbarThumbActive else colors.scrollbarThumb,
+                color = lerp(colors.scrollbarThumb, colors.scrollbarThumbActive, f),
                 topLeft = Offset(vw - w - marginPx, top),
                 size = Size(w, thumbH),
                 cornerRadius = CornerRadius(w / 2f),
