@@ -507,24 +507,11 @@ fun CodeEditor(
     val maxScrollYSettle = (contentHeight - viewportHeight).coerceAtLeast(0f)
     val maxScrollX = if (softWrap) 0f else (gutterWidthPx + padXPx * 2 + widestSeen[0] - viewportWidth).coerceAtLeast(0f)
 
-    // 视口变大 / 内容变短使 maxScroll 缩小时，把滚动量夹回范围内。否则在文档底部弹出输入法（视口被 imePadding
-    // 压小、scrollY 被 keep-in-view 推大）后收起输入法，视口复原、maxScrollY 骤减，而 scrollY 残留旧大值：
-    // firstVisibleLine 读未夹的 scrollY 会指到更靠下的行，绘制偏移却读已夹的 scrollY，二者错位 → 上方留空白。
-    // 视口「变大」（收键盘 / 转屏变高）→ 夹到自然底 maxScrollYSettle（末行贴底、不残留留白，修 IME 收键盘留白）；
-    // 其余（缩放/编辑改内容高、弹键盘缩小视口）→ 夹到含留白的 maxScrollY，**缩放/编辑不夹掉主动滚入的底部留白、不跳**。
-    // 按「上一帧视口高」判定「变大」，确定性、不依赖 effect 执行顺序。主动滚动不改这些 key、不触发本效应，留白得以保持。
-    val prevViewportH = remember { floatArrayOf(0f) }
-    LaunchedEffect(maxScrollY, maxScrollX, viewportHeight) {
-        val grew = viewportHeight > prevViewportH[0]
-        prevViewportH[0] = viewportHeight
-        scrollY = scrollY.coerceIn(0f, if (grew) maxScrollYSettle else maxScrollY)
-        scrollX = scrollX.coerceIn(0f, maxScrollX)
-    }
-
     // 换行下缩放的顶部锚定精确校正：字号现每手势只在 commitZoom 变一次 → 本效应每手势只触发一次。commitZoom 已同步置好近似
     // scrollY（提交帧≈预览末帧）；本效应在可见行按新字号重排后，用新布局把「锚字符所在折行」精确放回视口顶 (y=0)——顶部稳定、
     // 下方重排（比锚焦点字符可预测，焦点在长折行里的新位置难料、易 settle）。k 公式对换行非均匀折行不成立，故换行走「顶部字符
-    // 锚定 + post-layout 校正」。声明在 re-clamp 效应之后 → 同帧内 scrollY 以本效应为准。不换行 scrollY 已由 k 公式精确设好、不进本效应。
+    // 锚定 + post-layout 校正」。re-clamp 效应声明在本效应之后（它要读滚动活动信号），但只做范围夹：
+    // 本效应的锚定值自身已 coerce 在范围内、不会被改写。不换行 scrollY 已由 k 公式精确设好、不进本效应。
     LaunchedEffect(fontSizeSp) {
         if (!softWrap) return@LaunchedEffect
         val ap = zoomWrapAnchorPos ?: return@LaunchedEffect
@@ -595,6 +582,26 @@ fun CodeEditor(
                 else -> draggingHolder[0]
             }
         }
+    }
+
+    // 视口变大 / 内容变短使 maxScroll 缩小时，把滚动量夹回范围内。否则在文档底部弹出输入法（视口被 imePadding
+    // 压小、scrollY 被 keep-in-view 推大）后收起输入法，视口复原、maxScrollY 骤减，而 scrollY 残留旧大值：
+    // firstVisibleLine 读未夹的 scrollY 会指到更靠下的行，绘制偏移却读已夹的 scrollY，二者错位 → 上方留空白。
+    // 视口「变大」（收键盘 / 转屏变高）→ 夹到自然底 maxScrollYSettle（末行贴底、不残留留白，修 IME 收键盘留白）；
+    // 其余（缩放/编辑改内容高、弹键盘缩小视口）→ 夹到含留白的 maxScrollY，**缩放/编辑不夹掉主动滚入的底部留白、不跳**。
+    // 按「上一帧视口高」判定「变大」，确定性、不依赖 effect 执行顺序。
+    // **滚动进行中贴底修正降级为宽松夹**：收键盘是多帧 insets 动画、本效应以 viewportHeight 为 key 逐帧
+    // 重启，而拖动/fling 的回调也在每帧写 scrollY（宽松上界、底部区域正落在留白带里）——逐帧把它拽回
+    // Settle 就是两个写者交替竞写，滚动肉眼抽搐。宽松夹已防住上面的错位空白（只需在范围内）；贴底只是
+    // 静止时的美观修正。「滚动进行中」= 正在拖动，或滚动条的活动时间戳刚被刷新（拖动/fling 每帧都刷它）。
+    val prevViewportH = remember { floatArrayOf(0f) }
+    LaunchedEffect(maxScrollY, maxScrollX, viewportHeight) {
+        val grew = viewportHeight > prevViewportH[0]
+        prevViewportH[0] = viewportHeight
+        val scrolling = draggingHolder[0] ||
+                scrollbarClock.last.elapsedNow() < SCROLLBAR_QUIET_GRAB_MS.milliseconds
+        scrollY = scrollY.coerceIn(0f, if (grew && !scrolling) maxScrollYSettle else maxScrollY)
+        scrollX = scrollX.coerceIn(0f, maxScrollX)
     }
     val scroll2D = rememberScrollable2DState { delta ->
         markUserScroll() // 用户拖动/fling 每帧到此：唤出滚动条并顺延淡出（零分配，state 只在显隐沿写）
