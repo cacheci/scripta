@@ -8,7 +8,6 @@ plugins {
 kotlin {
     jvmToolchain(21)
 
-    // Android target — the primary platform. This is where the full self-managed IME lives (later).
     android {
         namespace = "top.yukonga.scripta.editor"
         compileSdk {
@@ -17,14 +16,13 @@ kotlin {
             }
         }
         minSdk = 24
+        withHostTest {}
     }
 
-    // Desktop (JVM/skiko) target — simplified input path; kept so the shared logic stays multiplatform.
     jvm("desktop")
 
     sourceSets {
         commonMain.dependencies {
-            // Brings compose runtime + ui + ui-text + foundation-layout transitively.
             api(libs.compose.foundation)
         }
         commonTest.dependencies {
