@@ -213,6 +213,8 @@ fun CodeEditor(
     colors: EditorColors = EditorColors.Default,
     readOnly: Boolean = false,
     softWrap: Boolean = false,
+    /** 是否启用滚动到内容边界外时的弹性反馈。关闭后仍保留正常滚动。 */
+    overscrollEnabled: Boolean = true,
     lineNumberMode: LineNumberMode = LineNumberMode.PinnedToScreen,
     symbols: List<EditorSymbol> = DefaultEditorSymbols,
     /** 键入智能：括号/引号自动配对、跳过闭合、成对退格。改变输入行为本身，故给宿主关闭权
@@ -1054,9 +1056,9 @@ fun CodeEditor(
     // 底部安全区 = 导航栏 / captionBar / 键盘 三者较大者（union 取各边最大）。编辑器自管它：背景铺到屏幕边缘、
     // 内容抬到栏上，故宿主无需再加 imePadding/导航栏 padding。键盘收起=导航栏高，弹出=键盘高（已含导航栏区）。
     val bottomBarInsets = WindowInsets.navigationBars
-        .union(WindowInsets.captionBar)
-        .union(WindowInsets.ime)
-        .only(WindowInsetsSides.Bottom)
+            .union(WindowInsets.captionBar)
+            .union(WindowInsets.ime)
+            .only(WindowInsetsSides.Bottom)
     val showSymbolBar = !readOnly && symbols.isNotEmpty()
 
     // 根为 Column：查找条（开启时）停靠最上、文本区（weight 1f）居中、符号条常驻在下。Column 底色铺满整列（含系统栏区）。
@@ -1083,7 +1085,7 @@ fun CodeEditor(
                 // 增高把文本区顶上去（文本区底 = 符号条顶，始终在系统栏之上），避免双重让位把文本区多压一截。
                 .then(if (showSymbolBar) Modifier else Modifier.windowInsetsPadding(bottomBarInsets))
                 .clipToBounds()
-                .overscroll(overscroll)
+                .then(if (overscrollEnabled) Modifier.overscroll(overscroll) else Modifier)
                 .onSizeChanged { viewportWidth = it.width.toFloat(); viewportHeight = it.height.toFloat() }
                 .onGloballyPositioned { contentTopInWindow = it.positionInWindow().y }
                 // 滚动条可抓期把右缘热区从系统手势区摘出来（Android 手势导航的返回区与热区重合，不摘则
@@ -1093,7 +1095,11 @@ fun CodeEditor(
                         Modifier.editorRightEdgeGestureExclusion(with(density) { SCROLLBAR_HOT_ZONE.toPx() })
                     } else Modifier
                 )
-                .scrollable2D(scroll2D, overscrollEffect = overscroll, interactionSource = scrollInteraction)
+                .scrollable2D(
+                    state = scroll2D,
+                    overscrollEffect = if (overscrollEnabled) overscroll else null,
+                    interactionSource = scrollInteraction,
+                )
                 // 鼠标滚轮 / 触控板滚动：scrollable2D 只含拖拽、无滚轮节点（滚轮逻辑只在 1D scrollable 的
                 // MouseWheelScrollingLogic 里），故自行处理 Scroll 事件、据 scrollDelta 更新滚动量。clamp 用实时
                 // 上界 + 实时行高，避开 pointerInput(Unit) 的 stale-capture。
