@@ -215,6 +215,8 @@ fun CodeEditor(
     softWrap: Boolean = false,
     /** 是否启用滚动到内容边界外时的弹性反馈。关闭后仍保留正常滚动。 */
     overscrollEnabled: Boolean = true,
+    /** 是否由编辑器内部为导航栏、标题栏和输入法应用底部安全区。 */
+    windowInsetsEnabled: Boolean = true,
     lineNumberMode: LineNumberMode = LineNumberMode.PinnedToScreen,
     symbols: List<EditorSymbol> = DefaultEditorSymbols,
     /** 键入智能：括号/引号自动配对、跳过闭合、成对退格。改变输入行为本身，故给宿主关闭权
@@ -1055,10 +1057,14 @@ fun CodeEditor(
 
     // 底部安全区 = 导航栏 / captionBar / 键盘 三者较大者（union 取各边最大）。编辑器自管它：背景铺到屏幕边缘、
     // 内容抬到栏上，故宿主无需再加 imePadding/导航栏 padding。键盘收起=导航栏高，弹出=键盘高（已含导航栏区）。
-    val bottomBarInsets = WindowInsets.navigationBars
+    val bottomBarInsets = if (windowInsetsEnabled) {
+        WindowInsets.navigationBars
             .union(WindowInsets.captionBar)
             .union(WindowInsets.ime)
             .only(WindowInsetsSides.Bottom)
+    } else {
+        WindowInsets(0, 0, 0, 0)
+    }
     val showSymbolBar = !readOnly && symbols.isNotEmpty()
 
     // 根为 Column：查找条（开启时）停靠最上、文本区（weight 1f）居中、符号条常驻在下。Column 底色铺满整列（含系统栏区）。
