@@ -8,6 +8,8 @@ plugins {
 kotlin {
     jvmToolchain(21)
 
+    iosArm64()
+
     android {
         namespace = "top.yukonga.scripta.editor"
         compileSdk {
